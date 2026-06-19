@@ -1,20 +1,24 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# Data
+data/raw/*
+data/labels/*
+data/processed/*
+!data/raw/.gitkeep
+!data/labels/.gitkeep
+
+# Checkpoints & models
+checkpoints/*
+models/*
+!checkpoints/.gitkeep
+!models/.gitkeep
+
 # Python
 __pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-venv/
-*.so
-
-# 数据文件
-data/processed/*.csv
-data/labels/*.parquet
-
-# 模型文件
-checkpoints/*.pt
-
-# ONNX
-*.onnx
+*.pyc
 
 # IDE
 .idea/
@@ -23,12 +27,8 @@ checkpoints/*.pt
 *.swo
 *~
 
-# OS
+# Environment
+.env
+
+# System
 .DS_Store
-Thumbs.db
-
-# 日志
-*.log
-
-# Go
-examples/go/inference/chan_distill.onnx

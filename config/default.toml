@@ -1,0 +1,27 @@
+# Chan-Distill RS 默认配置
+
+[data]
+seq_len = 60
+freq = "1h"
+
+[model]
+d_model = 64
+dropout = 0.1
+
+[training]
+epochs = 30
+batch_size = 64
+learning_rate = 0.001
+bsp_weight = 2.0
+val_split = 0.1
+seed = 42
+
+[loss_weights]
+return = 1.0
+top_fractal = 0.3
+bottom_fractal = 0.3
+bi_direction = 0.2
+bi_strength = 0.1
+zs_count = 0.1
+is_bsp = 0.5
+bsp_direction = 0.3

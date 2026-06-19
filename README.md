@@ -1,159 +1,367 @@
-# Chan-Distill：缠论蒸馏模型
+# Chan-Distill RS
 
-将缠论（Chan Theory）蒸馏进时序金字塔 CNN，输入 1m K 线、输出交易信号。**推理时一个 ONNX 文件搞定，零外部依赖。**
+**时序金字塔 + 缠论多周期标注 —— 纯 Rust 端到端交易信号模型**
 
-## 定位
+从 1m K 线出发，通过时序金字塔卷积网络，同时预测 8 个时间周期的缠论结构（分型、笔、中枢、买卖点）。
+
+---
+
+## 目录
+
+- [安装](#安装)
+- [数据格式](#数据格式)
+- [工作流程](#工作流程)
+- [标注](#1-标注-label)
+- [训练](#2-训练-train)
+- [推理](#3-推理-infer)
+- [模型架构](#模型架构)
+- [输出说明](#输出说明)
+- [常见问题](#常见问题)
+
+---
+
+## 安装
+
+需要 Rust 工具链 ≥ 1.80：
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+克隆并编译：
+
+```bash
+git clone <repo-url> chan-distill-rs
+cd chan-distill-rs
+
+# 编译（--release 约 5 分钟）
+cargo build --release
+```
+
+编译产物：`./target/release/chan_distill_rs`
+
+---
+
+## 数据格式
+
+### 输入 CSV（1m K 线）
+
+无表头，6 列，时间升序：
 
 ```
-上游项目: chan-xgb（同目录上级项目）
-          └── 缠论 + XGBoost → 信号评分，AUC 0.94
-              依赖 chan.py 侧车算特征
-
-本项目: chan-distill
-          └── 时序金字塔 CNN → 端到端信号，AUPRC 0.086（当前）
-              推理时零依赖，一个 ONNX 文件
+2023-01-01 00:00:00,16541.77,16544.76,16538.45,16543.67,83.08
+2023-01-01 00:01:00,16543.04,16544.41,16538.48,16539.31,80.45
 ```
 
-## 架构
+| 列 | 内容 | 示例 |
+|----|------|------|
+| 1 | 时间戳 | `2023-01-01 00:00:00` |
+| 2 | 开盘价 Open | `16541.77` |
+| 3 | 最高价 High | `16544.76` |
+| 4 | 最低价 Low | `16538.45` |
+| 5 | 收盘价 Close | `16543.67` |
+| 6 | 成交量 Vol | `83.08` |
 
-```mermaid
-flowchart LR
-    K["1m K线流"] --> BUF["rolling buffer<br/>10080根 (7天)"]
-    BUF --> ONNX["chan_distill.onnx<br/>(67KB)"]
-    ONNX --> OUT["{direction, confidence, is_bsp}"]
+支持的时间格式：
+- `%Y-%m-%d %H:%M:%S`
+- ISO 8601 (`2024-01-01T00:00:00Z`)
+- Unix 秒时间戳（10 位）
+- Unix 毫秒时间戳（13 位）
+
+有表头的 CSV 也可以，标注时不要加 `--no-header` 即可。
+
+### 输出 Parquet（44 列）
+
+标注后生成 44 列 Parquet 文件：
+
+| 列范围 | 内容 | 例 |
+|--------|------|----|
+| `dt`–`amount` | OHLCV 原始行情 | |
+| `1m_has_top`–`1w_zs` | 8 周期 × 4 缠论字段 | `1m_has_top: 0/1` |
+| `1m_bi_str` | 1m 笔强度 | |
+| `1m_is_bsp` | 1m 买卖点标志 | |
+| `1m_bsp_dir` | 1m 买卖方向 | 1=买, 2=卖 |
+| `next_return` | 未来收益率 | |
+| `return_label` | 涨跌分类 | 0=跌, 1=平, 2=涨 |
+
+---
+
+## 工作流程
+
+```
+1m CSV → label → 44 列 Parquet → train → safetensors → infer → JSONL 信号
 ```
 
-模型内部：7 级时序金字塔（Conv1d + stride 降采样）
+---
+
+## 1. 标注 `label`
+
+从 1m K 线生成 8 周期缠论标注。
+
+```bash
+# 基本用法（无表头 CSV，60 根 K 线序列）
+./target/release/chan_distill_rs label \
+    -d data/processed/BTCUSDT_1m.csv \
+    -o data/labels/BTCUSDT_1m.parquet \
+    --no-header \
+    --seq-len 60
+
+# 7 天序列（覆盖 1m→1w 全尺度）
+./target/release/chan_distill_rs label \
+    -d data/processed/BTCUSDT_1m.csv \
+    -o data/labels/BTCUSDT_1m_full.parquet \
+    --no-header \
+    --seq-len 10080
+```
+
+### 参数说明
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `-d, --data` | 必填 | 输入 CSV 路径 |
+| `-o, --output` | 必填 | 输出 Parquet 路径 |
+| `--no-header` | — | CSV 无表头（固定列序: dt,open,high,low,close,vol） |
+| `--seq-len` | `60` | 序列长度（控制 lookahead = seq_len/5） |
+| `--lookahead` | seq_len/5 | 向前看多少根 K 线算未来收益 |
+| `--freq` | `1h` | K 线周期（仅用于日志，不影响标注逻辑） |
+
+### 标注 179 万条 1m 数据的时间参考
+
+| seq_len | 数据量 | 时间 |
+|---------|--------|------|
+| 60 | 5,000 行 | < 1s |
+| 60 | 200,000 行 | ~10s |
+| 10080 | 200,000 行 | ~30s |
+| 10080 | 1,800,000 行 | ~5m |
+
+---
+
+## 2. 训练 `train`
+
+使用时序金字塔模型训练。
+
+```bash
+# 训练（自动检测 44 列 → 金字塔模型）
+./target/release/chan_distill_rs train \
+    -d "data/labels/*.parquet" \
+    --seq-len 60 \
+    --epochs 50 \
+    --batch-size 64
+```
+
+### 参数说明
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `-d, --data` | 必填 | Parquet 文件 glob 模式 |
+| `--seq-len` | `60` | 序列长度（须与 label 一致） |
+| `--epochs` | `50` | 训练轮数 |
+| `--batch-size` | `64` | 批次大小 |
+| `--learning-rate` | `0.001` | 学习率 |
+| `-o, --output-dir` | `checkpoints` | 模型保存目录 |
+| `--val-split` | `0.1` | 验证集比例 |
+| `--patience` | `10` | Early stopping 耐心值 |
+| `--seed` | `42` | 随机种子 |
+
+### 损失函数
+
+所有输出头使用**不确定性加权**（Uncertainty Weighting）：
 
 ```
-输入 10080 根 1m K 线 (7天)
-  │ stride=5   → 5m 分辨率 (2016 位置)
-  │ stride=3   → 15m 分辨率 (672 位置)
-  │ stride=2   → 30m 分辨率 (336 位置)
-  │ stride=2   → 1h 分辨率 (168 位置)
-  │ stride=4   → 4h 分辨率 (42 位置)
-  │ stride=6   → 1d 分辨率 (7 位置)
-  │ stride=7   → 1w 分辨率 (1 位置)
-  │ GAP → 128 维向量
+L_total = Σ (L_i × exp(-log_var_i) + 0.5 × log_var_i)
+```
+
+每个任务有一个可学习的 `log_var` 参数，训练过程中自动平衡各任务权重。噪声大的任务权重自动降低。
+
+### 输出
+
+训练完成后在 `--output-dir` 下生成：
+
+| 文件 | 说明 |
+|------|------|
+| `best.safetensors` | 最佳验证损失 checkpoint |
+| `epoch_0010.safetensors` | 每 10 epoch 保存 |
+
+---
+
+## 3. 推理 `infer`
+
+加载训练好的模型，对实时 1m K 线输出交易信号。
+
+```bash
+# 推理
+./target/release/chan_distill_rs infer \
+    -m checkpoints/best.safetensors \
+    -d data/processed/BTCUSDT_1m.csv \
+    --seq-len 60
+
+# 只输出 BSP（买卖点）信号
+./target/release/chan_distill_rs infer \
+    -m checkpoints/best.safetensors \
+    -d data/processed/BTCUSDT_1m.csv \
+    --seq-len 60 \
+    --bsp-only
+```
+
+### 输出格式（JSONL）
+
+```jsonl
+{"time":"2023-06-19 12:00:00","direction":1,"confidence":0.72,"is_bsp_prob":0.89}
+{"time":"2023-06-19 12:01:00","direction":0,"confidence":0.45,"is_bsp_prob":0.12}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `time` | string | K 线时间戳 |
+| `direction` | int | 0=无信号, 1=买入, 2=卖出 |
+| `confidence` | float | 置信度 [0, 1] |
+| `is_bsp_prob` | float | 买卖点概率 |
+
+---
+
+## 模型架构
+
+### 时序金字塔
+
+```
+输入: (B, T, 5) 1m OHLCV
   │
-  ├── 7 个输出头（涨跌 + Level-1 分型/笔 + BSP）
-  └── 4 个输出头（Level-2 区间套分型/笔）
+  ├── Level 0: Conv(5→32, k=7, s=5) → Conv(32→48, k=5)    → (B, 48, T/5)
+  ├── Level 1: Conv(48→64, k=7, s=3) → Conv(64→128, k=5)   → (B, 128, T/15)
+  ├── Level 2: Conv(128→128, k=5, s=2) → Conv(128→128, k=3) → (B, 128, T/30)
+  ├── Level 3: Conv(128→128, k=5, s=2) → Conv(128→128, k=3) → (B, 128, T/60)
+  ├── Level 4: Conv(128→128, k=5, s=4) → Conv(128→128, k=3) → (B, 128, T/240)
+  ├── Level 5: Conv(128→128, k=5, s=6) → Conv(128→128, k=3) → (B, 128, T/1440)
+  └── Level 6: Conv(128→128, k=3, s=7) → Conv(128→128, k=3) → (B, 128, T/10080)
+  │
+  GAP → (B, 128) → 36 个 Linear 头
 ```
 
-## 快速开始
+T=10080 时的降采样路径：
 
-### 1. 拉取数据
+```
+10080 → 2016 → 672 → 336 → 168 → 42 → 7 → 1
+```
+
+短序列（T < 7）自动截断多余层。
+
+### 36 个输出头
+
+| 索引 | 名称 | 维度 | 类型 | 周期 |
+|------|------|------|------|------|
+| 0 | return_logits | 3 | CE 分类 | 1m |
+| 1 | 1m_has_top | 1 | BCE | 1m |
+| 2 | 1m_has_bottom | 1 | BCE | 1m |
+| 3 | 1m_bi_dir | 3 | CE | 1m |
+| 4 | 1m_bi_str | 1 | MSE 回归 | 1m |
+| 5 | 1m_zs | 1 | MSE 回归 | 1m |
+| 6 | 1m_is_bsp | 1 | BCE | 1m |
+| 7 | 1m_bsp_dir | 3 | CE | 1m |
+| 8-11 | 5m_top/btm/bi_dir/zs | 1/1/3/1 | BCE/BCE/CE/MSE | 5m |
+| 12-15 | 15m ... | 同上 | | 15m |
+| 16-19 | 30m ... | | | 30m |
+| 20-23 | 1h ... | | | 1h |
+| 24-27 | 4h ... | | | 4h |
+| 28-31 | 1d ... | | | 1d |
+| 32-35 | 1w ... | | | 1w |
+
+### 三类买卖点检测（标注阶段）
+
+`BspState` 状态机，跨 bar 持久化追踪：
+
+| 类型 | 条件 |
+|------|------|
+| **一买** | 下跌段背驰（新低 + 力度减弱）+ 反转向上 |
+| **二买** | 一买后回拉不破前低 |
+| **三买** | 突破中枢后回拉不进入中枢 |
+| 卖点对称 | Up/Down 互换 |
+
+---
+
+## 快速示例
+
+从原始数据到交易信号的全流程：
 
 ```bash
-# Go 版本（需要安装 Go）
-go run scripts/fetch_1m.go
+# 1. 标注
+./target/release/chan_distill_rs label \
+    -d data/processed/BTCUSDT_1m.csv \
+    -o data/labels/BTCUSDT_1m.parquet \
+    --no-header --seq-len 10080
 
-# 或 Python 版本（需要 ccxt）
-python scripts/fetch_1m.py
+# 2. 训练
+./target/release/chan_distill_rs train \
+    -d data/labels/BTCUSDT_1m.parquet \
+    --seq-len 10080 --epochs 30 --batch-size 32
+
+# 3. 推理
+./target/release/chan_distill_rs infer \
+    -m checkpoints/best.safetensors \
+    -d data/processed/BTCUSDT_1m.csv \
+    --seq-len 10080 > signals.jsonl
 ```
 
-产出：`data/processed/{BTC,ETH,BNB,SOL,XRP}USDT_1m.csv`
+---
 
-### 2. 生成标注数据
-
-```bash
-python scripts/generate_labels.py \
-  --symbols BTCUSDT ETHUSDT BNBUSDT SOLUSDT XRPUSDT \
-  --timeframes 1m \
-  --seq-len 10080 --stride 1008
-```
-
-产出：`data/labels/*_1m.parquet`
-
-### 3. 训练
-
-```bash
-python train.py --seq-len 10080 --d-model 128 --batch-size 8 --epochs 20
-```
-
-产出：`checkpoints/best.pt`
-
-### 4. 导出 ONNX
-
-```bash
-python export_onnx.py \
-  --checkpoint checkpoints/best.pt \
-  --output chan_distill.onnx \
-  --seq-len 10080 --d-model 128 --in-channels 5
-```
-
-产出：`chan_distill.onnx`（67KB）
-
-### 5. 推理
-
-```python
-# Python
-from infer import ChanDistillInference
-
-engine = ChanDistillInference("chan_distill.onnx", seq_len=10080)
-for ohlcv in kline_stream():
-    signal = engine.update(ohlcv)  # 内部自动滚动 buffer
-    if signal:
-        print(f"{signal['direction']} 置信度 {signal['confidence']}")
-```
-
-```go
-// Go (examples/go/inference/main.go)
-engine := NewEngine("chan_distill.onnx")
-for kline := range klineStream {
-    signal := engine.Update(kline)
-    if signal != nil {
-        fmt.Printf("%s %s confidence=%.4f\n", kline.Timestamp, signal.Direction, signal.Confidence)
-    }
-}
-```
-
-## 项目结构
+## 目录结构
 
 ```
-├── scripts/
-│   ├── generate_labels.py    # 缠论标注管线
-│   └── fetch_1m.go           # 币安 1m 数据拉取
-├── model/
-│   └── chandistill.py        # 时序金字塔 CNN + 11 输出头
-├── train.py                  # 多任务训练
-├── infer.py                  # Python 推理
-├── export_onnx.py            # ONNX 导出
-├── examples/go/inference/    # Go 推理示例
-├── docs/
-│   └── architecture.md       # 架构图
+chan-distill-rs/
+├── Cargo.toml
+├── src/
+│   ├── main.rs              # CLI 入口
+│   ├── label/mod.rs         # 8 周期 CZSC 标注 → 44 列 Parquet
+│   ├── model/
+│   │   ├── mod.rs           # pub mod multi_tf
+│   │   └── multi_tf.rs      # 时序金字塔模型 + 36 头 + 不确定性加权损失
+│   ├── train/mod.rs         # 金字塔模型训练
+│   └── infer/mod.rs         # 推理（Candle 原生 + ONNX Runtime）
 ├── data/
-│   ├── processed/            # 1m K 线 CSV（gitignored）
-│   └── labels/               # 标注 parquet（gitignored）
-├── checkpoints/              # 模型权重（gitignored）
-└── requirements.txt
+│   ├── processed/           # 原始 1m CSV
+│   └── labels/              # 标注后 Parquet
+└── checkpoints/             # 训练 checkpoint
 ```
 
-## 模型输出
+---
 
-| 输出头 | 维度 | 含义 |
-|--------|------|------|
-| `return_logits` | 3 | 未来涨跌（跌/平/涨）|
-| `top_fractal` | 1 | Level-1 顶分型 |
-| `bottom_fractal` | 1 | Level-1 底分型 |
-| `bi_direction_logits` | 3 | 笔方向 |
-| `bi_strength` | 1 | 笔强度（回归）|
-| `is_bsp` | 1 | 买卖点检测 |
-| `bsp_direction_logits` | 3 | BSP 方向 |
-| `top_fractal_L2` | 1 | Level-2 顶分型（区间套）|
-| `bottom_fractal_L2` | 1 | Level-2 底分型 |
-| `bi_direction_logits_L2` | 3 | Level-2 笔方向 |
-| `bi_strength_L2` | 1 | Level-2 笔强度 |
+## 常见问题
 
-最终信号：`buy_score = is_bsp × softmax(bsp_dir)[买]`，取最大值方向 + 置信度。
+**Q: Metal GPU 报错 "Failed to create metal resource"**
 
-## 与 chan-xgb 的关系
+训练默认用 CPU，Metal 对小张量支持不稳定。如需 Metal，设置环境变量：
+```bash
+RUST_LOG=info ./target/release/chan_distill_rs train ...
+```
 
-| 维度 | chan-xgb | chan-distill |
-|------|----------|-------------|
-| 模型 | XGBoost + 7 模型 Ensemble | 金字塔 CNN × 1 |
-| 推理依赖 | chan.py 侧车 | ONNX Runtime 就够了 |
-| 输入 | 61 维人工特征 | 原始 1m OHLCV |
-| 数据 | ~8000 BSP 样本 | ~9000 样本（5 币种） |
-| AUPRC | 0.94（AUC） | 0.086（AUPRC） |
-| 状态 | ✅ 可上线 | 🔄 研发中 |
+**Q: 训练很慢**
+
+`--release` 模式是必须的。Debug 模式慢 10-50 倍。如果 CPU 训练太慢，可将 `batch-size` 调到 `16` 或 `8`。
+
+**Q: 标注很慢**
+
+`seq-len` 越大，`lookahead` 越大，标注时间线性增长。10080 的 seq-len 标注 200 万行约 5 分钟。初次测试可以用 `--seq-len 60` 快速验证。
+
+**Q: 怎么跨币种训练**
+
+将多个币种的 Parquet 文件放在同个目录，训练时用 glob 模式：
+```bash
+./target/release/chan_distill_rs train -d "data/labels/*.parquet" --seq-len 10080
+```
+
+所有 OHLCV 数据会在加载时做价格标准化（除以窗口最后一个 close），不同币种自动对齐。
+
+**Q: 怎么导出 ONNX**
+
+Candle 的 `candle-onnx` 不支持导出。如需 ONNX 格式，使用 Python 版加载 safetensors 后导出，或在 Candle 新版本中等待支持。
+
+---
+
+## 技术栈
+
+| 组件 | 选型 |
+|------|------|
+| 深度学习 | Candle (HuggingFace) v0.10.2 |
+| 缠论引擎 | czsc-core v1.0.0-rc.8 |
+| 数据格式 | CSV → Parquet (Polars) |
+| 推理 | Candle 原生 / ONNX Runtime (ort) |
+| GPU | 可选 Metal / CUDA |
