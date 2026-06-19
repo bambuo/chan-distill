@@ -12,7 +12,7 @@ use czsc_core::objects::freq::Freq;
 use czsc_core::objects::fx::FX;
 use czsc_core::objects::mark::Mark;
 
-use super::bsp::{BspState, find_zs_groups};
+use super::bsp::find_zs_groups;
 
 pub const MAX_BI_NUM: usize = 5000;
 

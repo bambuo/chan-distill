@@ -1,6 +1,6 @@
 //! Candle 原生推理（.safetensors）
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::{VarBuilder, VarMap};
 
