@@ -1,8 +1,10 @@
 # Chan-Distill RS
 
-**时序金字塔 + 缠论多周期标注 —— 纯 Rust 端到端交易信号模型**
+**时序金字塔 + 缠论多周期标注 —— 纯 Rust 端到端缠论辅助学习系统**
 
-从 1m K 线出发，通过时序金字塔卷积网络，同时预测 8 个时间周期的缠论结构（分型、笔、中枢、买卖点）。
+用缠论标注提供结构化先验，1D-CNN 从原始 1m K 线学习价格模式，同时输出 8 个时间周期的缠论结构（分型、笔、中枢、买卖点）与涨跌预测信号。
+
+> 这不是"蒸馏"（不追求模型替代缠论），而是"缠论辅助学习"——缠论标注提供结构先验，主任务（涨跌预测）提供密集训练信号。
 
 ---
 
@@ -13,7 +15,8 @@
 - [工作流程](#工作流程)
 - [标注](#1-标注-label)
 - [训练](#2-训练-train)
-- [推理](#3-推理-infer)
+- [导出](#3-导出-export)
+- [推理](#4-推理-infer)
 - [模型架构](#模型架构)
 - [输出说明](#输出说明)
 - [常见问题](#常见问题)
@@ -76,7 +79,7 @@ cargo build --release
 
 | 列范围 | 内容 | 例 |
 |--------|------|----|
-| `dt`–`amount` | OHLCV 原始行情 | |
+| `dt`–`amount` | OHLCV 原始行情（7 列: dt, open, close, high, low, vol, amount） | |
 | `1m_has_top`–`1w_zs` | 8 周期 × 4 缠论字段 | `1m_has_top: 0/1` |
 | `1m_bi_str` | 1m 笔强度 | |
 | `1m_is_bsp` | 1m 买卖点标志 | |
@@ -89,7 +92,7 @@ cargo build --release
 ## 工作流程
 
 ```
-1m CSV → label → 44 列 Parquet → train → safetensors → infer → JSONL 信号
+1m CSV → label → 44 列 Parquet → train → safetensors → export → ONNX → infer → JSONL 信号
 ```
 
 ---
@@ -123,6 +126,8 @@ cargo build --release
 | `--no-header` | — | CSV 无表头（固定列序: dt,open,high,low,close,vol） |
 | `--seq-len` | `60` | 序列长度（控制 lookahead = seq_len/5） |
 | `--lookahead` | seq_len/5 | 向前看多少根 K 线算未来收益 |
+| `--fx-threshold` | `50` | CZSC 最大笔数 |
+| `--ret-threshold` | 自动（波动率自适应） | 涨跌分类阈值（百分比） |
 | `--freq` | `1h` | K 线周期（仅用于日志，不影响标注逻辑） |
 
 ### 标注 179 万条 1m 数据的时间参考
@@ -184,24 +189,64 @@ L_total = Σ (L_i × exp(-log_var_i) + 0.5 × log_var_i)
 
 ---
 
-## 3. 推理 `infer`
+## 3. 导出 `export`
 
-加载训练好的模型，对实时 1m K 线输出交易信号。
+验证并导出模型权重（可选，用于备份或迁移）。
 
 ```bash
-# 推理
+# 验证模型并导出
+./target/release/chan_distill_rs export \
+    -m checkpoints/best.safetensors \
+    -o models/exported.safetensors \
+    --seq-len 60
+```
+
+### 参数说明
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `-m, --checkpoint` | 必填 | 输入的 safetensors checkpoint |
+| `-o, --output` | — | 输出路径（不指定则只验证不保存） |
+| `--seq-len` | `60` | 序列长度（须与训练一致） |
+
+---
+
+## 4. 推理 `infer`
+
+加载训练好的模型，对 1m K 线输出交易信号。支持 Candle 原生（`.safetensors`）和 ONNX Runtime（`.onnx`）两种后端。
+
+```bash
+# Candle 原生推理
 ./target/release/chan_distill_rs infer \
     -m checkpoints/best.safetensors \
     -d data/processed/BTCUSDT_1m.csv \
     --seq-len 60
 
-# 只输出 BSP（买卖点）信号
+# 只输出 BSP（买卖点）信号，结果写入文件
 ./target/release/chan_distill_rs infer \
     -m checkpoints/best.safetensors \
     -d data/processed/BTCUSDT_1m.csv \
     --seq-len 60 \
-    --bsp-only
+    --bsp-only \
+    -o signals.jsonl
+
+# ONNX Runtime 推理
+./target/release/chan_distill_rs infer \
+    -m models/model.onnx \
+    -d data/processed/BTCUSDT_1m.csv \
+    --seq-len 60
 ```
+
+### 参数说明
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `-m, --model` | 必填 | 模型路径（.safetensors 或 .onnx） |
+| `-d, --data` | 必填 | 输入 CSV 路径（需有表头） |
+| `-o, --output` | stdout | 输出 JSONL 文件路径 |
+| `--seq-len` | `60` | 序列长度（须与训练一致） |
+| `--bsp-only` | — | 只输出 BSP 概率 > 0.5 的信号 |
+| `--threshold` | `0.5` | 涨跌信号置信度阈值 |
 
 ### 输出格式（JSONL）
 
@@ -223,19 +268,23 @@ L_total = Σ (L_i × exp(-log_var_i) + 0.5 × log_var_i)
 
 ### 时序金字塔
 
+7 层 Conv1D，步长序列 `[5, 3, 2, 2, 4, 6, 7]`，每层两级卷积：
+
 ```
 输入: (B, T, 5) 1m OHLCV
   │
-  ├── Level 0: Conv(5→32, k=7, s=5) → Conv(32→48, k=5)    → (B, 48, T/5)
-  ├── Level 1: Conv(48→64, k=7, s=3) → Conv(64→128, k=5)   → (B, 128, T/15)
-  ├── Level 2: Conv(128→128, k=5, s=2) → Conv(128→128, k=3) → (B, 128, T/30)
-  ├── Level 3: Conv(128→128, k=5, s=2) → Conv(128→128, k=3) → (B, 128, T/60)
-  ├── Level 4: Conv(128→128, k=5, s=4) → Conv(128→128, k=3) → (B, 128, T/240)
-  ├── Level 5: Conv(128→128, k=5, s=6) → Conv(128→128, k=3) → (B, 128, T/1440)
-  └── Level 6: Conv(128→128, k=3, s=7) → Conv(128→128, k=3) → (B, 128, T/10080)
+  ├── Level 0: Conv(5→32, k=7, s=5)  → Conv(32→48, k=5)   → (B, 48,  T/5)
+  ├── Level 1: Conv(48→48, k=7, s=3) → Conv(48→128, k=5)  → (B, 128, T/15)
+  ├── Level 2: Conv(128→128, k=3,s=2)→ Conv(128→128, k=5) → (B, 128, T/30)
+  ├── Level 3: Conv(128→128, k=3,s=2)→ Conv(128→128, k=5) → (B, 128, T/60)
+  ├── Level 4: Conv(128→128, k=7,s=4)→ Conv(128→128, k=5) → (B, 128, T/240)
+  ├── Level 5: Conv(128→128, k=7,s=6)→ Conv(128→128, k=5) → (B, 128, T/1440)
+  └── Level 6: Conv(128→128, k=7,s=7)→ Conv(128→128, k=5) → (B, 128, T/10080)
   │
   GAP → (B, 128) → 36 个 Linear 头
 ```
+
+> kernel 大小根据步长自适应：stride ≥ 5 → k=7，stride ≥ 3 → k=5，否则 k=3。
 
 T=10080 时的降采样路径：
 
@@ -294,11 +343,17 @@ T=10080 时的降采样路径：
     -d data/labels/BTCUSDT_1m.parquet \
     --seq-len 10080 --epochs 30 --batch-size 32
 
-# 3. 推理
+# 3. 导出（可选）
+./target/release/chan_distill_rs export \
+    -m checkpoints/best.safetensors \
+    -o models/best.safetensors \
+    --seq-len 10080
+
+# 4. 推理
 ./target/release/chan_distill_rs infer \
     -m checkpoints/best.safetensors \
     -d data/processed/BTCUSDT_1m.csv \
-    --seq-len 10080 > signals.jsonl
+    --seq-len 10080 -o signals.jsonl
 ```
 
 ---
@@ -308,18 +363,21 @@ T=10080 时的降采样路径：
 ```
 chan-distill-rs/
 ├── Cargo.toml
+├── config/
+│   └── default.toml          # 默认配置（seq_len、模型参数、损失权重等）
 ├── src/
-│   ├── main.rs              # CLI 入口
+│   ├── main.rs              # CLI 入口（label / train / export / infer）
 │   ├── label/mod.rs         # 8 周期 CZSC 标注 → 44 列 Parquet
 │   ├── model/
 │   │   ├── mod.rs           # pub mod multi_tf
 │   │   └── multi_tf.rs      # 时序金字塔模型 + 36 头 + 不确定性加权损失
-│   ├── train/mod.rs         # 金字塔模型训练
-│   └── infer/mod.rs         # 推理（Candle 原生 + ONNX Runtime）
+│   ├── train/mod.rs         # 金字塔模型训练（AdamW + Early Stopping）
+│   └── infer/mod.rs         # 导出 + 推理（Candle 原生 + ONNX Runtime）
 ├── data/
 │   ├── processed/           # 原始 1m CSV
 │   └── labels/              # 标注后 Parquet
-└── checkpoints/             # 训练 checkpoint
+├── checkpoints/             # 训练 checkpoint
+└── models/                  # 导出模型
 ```
 
 ---
@@ -362,6 +420,7 @@ Candle 的 `candle-onnx` 不支持导出。如需 ONNX 格式，使用 Python �
 |------|------|
 | 深度学习 | Candle (HuggingFace) v0.10.2 |
 | 缠论引擎 | czsc-core v1.0.0-rc.8 |
-| 数据格式 | CSV → Parquet (Polars) |
-| 推理 | Candle 原生 / ONNX Runtime (ort) |
-| GPU | 可选 Metal / CUDA |
+| 数据格式 | CSV → Parquet (Polars v0.45) |
+| 推理 | Candle 原生 (.safetensors) / ONNX Runtime (ort v2.0) |
+| GPU | 可选 Metal (default feature) / CUDA |
+| Rust | Edition 2024, 工具链 ≥ 1.80 |
