@@ -363,21 +363,28 @@ T=10080 时的降采样路径：
 ```
 chan-distill-rs/
 ├── Cargo.toml
-├── config/
-│   └── default.toml          # 默认配置（seq_len、模型参数、损失权重等）
 ├── src/
-│   ├── main.rs              # CLI 入口（label / train / export / infer）
-│   ├── label/mod.rs         # 8 周期 CZSC 标注 → 44 列 Parquet
+│   ├── main.rs                 # CLI 入口（label / train / export / infer）
+│   ├── label/
+│   │   ├── mod.rs              # 标注主流程 + CLI 参数
+│   │   ├── csv_reader.rs       # CSV 读取 + 时间解析 + OHLCV 校验
+│   │   ├── czsc_label.rs       # CZSC 多周期管理 + 分型/笔/中枢提取
+│   │   ├── bsp.rs              # 三类买卖点状态机 + 中枢分组
+│   │   └── parquet_out.rs      # 44 列 Parquet 输出
 │   ├── model/
-│   │   ├── mod.rs           # pub mod multi_tf
-│   │   └── multi_tf.rs      # 时序金字塔模型 + 36 头 + 不确定性加权损失
-│   ├── train/mod.rs         # 金字塔模型训练（AdamW + Early Stopping）
-│   └── infer/mod.rs         # 导出 + 推理（Candle 原生 + ONNX Runtime）
+│   │   ├── mod.rs              # pub mod multi_tf
+│   │   └── multi_tf.rs         # 时序金字塔模型 + 36 头 + 不确定性加权损失
+│   ├── train/
+│   │   └── mod.rs              # 金字塔模型训练（AdamW + Early Stopping）
+│   └── infer/
+│       ├── mod.rs              # 导出 + 推理协调入口
+│       ├── candle.rs           # Candle 原生推理（.safetensors）
+│       └── onnx.rs             # ONNX Runtime 推理（.onnx）
 ├── data/
-│   ├── processed/           # 原始 1m CSV
-│   └── labels/              # 标注后 Parquet
-├── checkpoints/             # 训练 checkpoint
-└── models/                  # 导出模型
+│   ├── processed/              # 原始 1m CSV
+│   └── labels/                 # 标注后 Parquet
+├── checkpoints/                # 训练 checkpoint
+└── models/                     # 导出模型
 ```
 
 ---
