@@ -6,15 +6,20 @@
 //!
 //! 价格标准化（除以窗口最后一根 close）与训练时一致。
 
+pub mod candle;
+pub mod onnx;
+
 use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use clap::Args;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::{VarBuilder, VarMap};
-use clap::Args;
 
 use crate::model::multi_tf::{MultiTfModel, head_count, DEFAULT_STRIDES};
+use candle::run_candle_infer;
+use onnx::run_ort_infer;
 
 // ─── CLI ──────────────────────────────────────────────
 
@@ -58,13 +63,13 @@ pub struct SignalRecord {
 // ─── CSV 读取 ─────────────────────────────────────────
 
 #[derive(Debug, Clone)]
-struct OhlcvRecord {
-    dt: String,
-    open: f32,
-    high: f32,
-    low: f32,
-    close: f32,
-    vol: f32,
+pub struct OhlcvRecord {
+    pub dt: String,
+    pub open: f32,
+    pub high: f32,
+    pub low: f32,
+    pub close: f32,
+    pub vol: f32,
 }
 
 fn read_ohlcv_csv(path: &std::path::Path) -> Result<Vec<OhlcvRecord>> {
@@ -109,7 +114,7 @@ fn find_col(cols: &[String], names: &[&str]) -> Option<usize> {
 // ─── 价格标准化 ─────────────────────────────────────
 
 /// 与训练时 run_multi_tf 的预处理一致
-fn normalize_window(records: &[OhlcvRecord], start: usize, end: usize, seq_len: usize) -> Vec<f32> {
+pub fn normalize_window(records: &[OhlcvRecord], start: usize, end: usize, seq_len: usize) -> Vec<f32> {
     let base_price = records[end].close;
     let base_price = if base_price <= 0.0 { 1.0 } else { base_price };
 
@@ -129,35 +134,6 @@ fn normalize_window(records: &[OhlcvRecord], start: usize, end: usize, seq_len: 
         data.push(r.vol / vol_mean);
     }
     data
-}
-
-// ─── 头索引 ──────────────────────────────────────────
-
-/// 从 36 头中取信号 (hi=0→return_logits, hi=6→is_bsp_raw)
-fn extract_signal(outputs: &[Tensor], threshold: f64) -> Result<(i64, f64, f64)> {
-    // hi=0: return_logits (B, 3) → softmax → direction + confidence
-    let probs = candle_nn::ops::softmax(&outputs[0], 1)?;
-    let p_drop: f64 = probs.get(0)?.to_scalar()?;
-    let p_rise: f64 = probs.get(2)?.to_scalar()?;
-
-    let (dir, conf) = if p_rise > p_drop && p_rise >= threshold {
-        (1_i64, p_rise)
-    } else if p_drop > p_rise && p_drop >= threshold {
-        (2_i64, p_drop)
-    } else {
-        (0_i64, p_drop.max(p_rise))
-    };
-
-    // hi=6: is_bsp raw logits (B, 1) → sigmoid → prob
-    let bsp_logit = &outputs[6];
-    let bsp_prob = if bsp_logit.dim(1)? >= 1 {
-        let bsp_prob_t = candle_nn::ops::sigmoid(&bsp_logit)?;
-        bsp_prob_t.squeeze(1)?.to_vec1::<f32>()?[0] as f64
-    } else {
-        0.0
-    };
-
-    Ok((dir, conf, bsp_prob))
 }
 
 // ─── 导出 ─────────────────────────────────────────────
@@ -241,130 +217,4 @@ pub fn run_infer(args: InferArgs) -> Result<()> {
 
     log::info!("推理完成 ✅");
     Ok(())
-}
-
-// ─── Candle 原生推理 ─────────────────────────────────
-
-fn run_candle_infer(args: &InferArgs, records: &[OhlcvRecord]) -> Result<Vec<SignalRecord>> {
-    log::info!("使用 Candle 金字塔推理");
-
-    let device = Device::metal_if_available(0).unwrap_or_else(|_| Device::Cpu);
-    log::info!("设备: {:?}", device);
-
-    let mut varmap = VarMap::new();
-    let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
-    varmap.load(&args.model)?;
-    let model = MultiTfModel::new(&DEFAULT_STRIDES, &vb)?;
-    let n_heads = head_count(&DEFAULT_STRIDES);
-
-    let n = records.len();
-    let mut signals = Vec::with_capacity(n - args.seq_len + 1);
-
-    for end in (args.seq_len - 1)..n {
-        let start = end + 1 - args.seq_len;
-        let data = normalize_window(records, start, end, args.seq_len);
-        let x = Tensor::from_slice(&data, (1, args.seq_len, 5), &device)?;
-
-        let outputs = model.forward(&x)?;
-        if outputs.len() < n_heads {
-            log::warn!("模型输出不足: 预期 {} 实际 {}", n_heads, outputs.len());
-            continue;
-        }
-
-        let (direction, confidence, is_bsp_prob) = extract_signal(&outputs, args.threshold)?;
-
-        signals.push(SignalRecord {
-            time: records[end].dt.clone(),
-            direction,
-            confidence,
-            is_bsp_prob,
-        });
-    }
-
-    log::info!("推理了 {} 个窗口", signals.len());
-    Ok(signals)
-}
-
-// ─── ONNX Runtime 推理 ───────────────────────────────
-
-fn run_ort_infer(args: &InferArgs, records: &[OhlcvRecord]) -> Result<Vec<SignalRecord>> {
-    log::info!("使用 ONNX Runtime 推理");
-
-    let mut session = ort::session::Session::builder()?
-        .commit_from_file(&args.model)?;
-
-    let output_names: Vec<String> = session.outputs().iter().map(|o| o.name().to_string()).collect();
-    log::info!("ONNX 输出: {:?}", output_names);
-
-    let idx_return = output_names.iter().position(|n| n.contains("return_logits"));
-    let idx_bsp = output_names.iter().position(|n| n.contains("is_bsp"));
-
-    let n = records.len();
-    let mut signals = Vec::with_capacity(n - args.seq_len + 1);
-
-    for end in (args.seq_len - 1)..n {
-        let start = end + 1 - args.seq_len;
-        let data = normalize_window(records, start, end, args.seq_len);
-
-        let input_tensor = ort::value::Tensor::from_array((
-            [1_usize, args.seq_len, 5],
-            data,
-        ))?;
-
-        let ort_outputs = session.run(ort::inputs![input_tensor])?;
-
-        let (direction, confidence, is_bsp_prob) = if let Some(ret_idx) = idx_return {
-            match extract_ort_f32(&ort_outputs, ret_idx) {
-                Ok(logits) if logits.len() >= 3 => {
-                    let probs = softmax_1d(&logits[..3]);
-                    let p_drop = probs[0];
-                    let p_rise = probs[2];
-                    let thr = args.threshold;
-
-                    let (dir, conf) = if p_rise > p_drop && p_rise >= thr {
-                        (1_i64, p_rise)
-                    } else if p_drop > p_rise && p_drop >= thr {
-                        (2_i64, p_drop)
-                    } else {
-                        (0_i64, p_drop.max(p_rise))
-                    };
-
-                    let bsp = if let Some(bsp_idx) = idx_bsp {
-                        extract_ort_f32(&ort_outputs, bsp_idx)
-                            .ok().and_then(|v| v.first().copied()).unwrap_or(0.0) as f64
-                    } else {
-                        0.0
-                    };
-
-                    (dir, conf, bsp)
-                }
-                _ => (0, 0.0, 0.0),
-            }
-        } else {
-            (0, 0.0, 0.0)
-        };
-
-        signals.push(SignalRecord {
-            time: records[end].dt.clone(),
-            direction,
-            confidence,
-            is_bsp_prob,
-        });
-    }
-
-    Ok(signals)
-}
-
-// ─── 辅助函数 ───────────────────────────────────────
-
-fn extract_ort_f32(outputs: &ort::session::SessionOutputs, index: usize) -> Result<Vec<f32>> {
-    let (_shape, data) = outputs[index].try_extract_tensor::<f32>()?;
-    Ok(data.to_vec())
-}
-
-fn softmax_1d(x: &[f32]) -> Vec<f64> {
-    let max = x.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    let exps: Vec<f64> = x.iter().map(|v| ((v - max) as f64).exp()).collect();
-    let s: f64 = exps.iter().sum();
-    exps.into_iter().map(|e| e / s).collect()
 }
