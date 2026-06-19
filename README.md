@@ -2,6 +2,12 @@
 
 **时序金字塔 + 缠论多周期标注 —— 纯 Rust 端到端缠论辅助学习系统**
 
+<p align="center">
+  <img src="https://img.shields.io/badge/rust-1.80+-orange?logo=rust" alt="Rust">
+  <img src="https://img.shields.io/badge/license-MIT-yellow" alt="License">
+  <img src="https://img.shields.io/badge/candle-0.10.2-blue" alt="Candle">
+</p>
+
 用缠论标注提供结构化先验，1D-CNN 从原始 1m K 线学习价格模式，同时输出 8 个时间周期的缠论结构（分型、笔、中枢、买卖点）与涨跌预测信号。
 
 > 这不是"蒸馏"（不追求模型替代缠论），而是"缠论辅助学习"——缠论标注提供结构先验，主任务（涨跌预测）提供密集训练信号。
@@ -12,6 +18,7 @@
 
 - [安装](#安装)
 - [数据格式](#数据格式)
+- [配置文件](#配置文件)
 - [工作流程](#工作流程)
 - [标注](#1-标注-label)
 - [训练](#2-训练-train)
@@ -86,6 +93,42 @@ cargo build --release
 | `1m_bsp_dir` | 1m 买卖方向 | 1=买, 2=卖 |
 | `next_return` | 未来收益率 | |
 | `return_label` | 涨跌分类 | 0=跌, 1=平, 2=涨 |
+
+---
+
+## 配置文件
+
+项目通过 `config/default.toml` 管理训练超参数，命令行参数会覆盖配置文件中的值。
+
+```toml
+[data]
+seq_len = 60          # 序列长度
+freq = "1h"           # K 线周期（仅用于日志）
+
+[model]
+d_model = 64          # 模型宽度
+dropout = 0.1         # Dropout 比例
+
+[training]
+epochs = 30           # 训练轮数
+batch_size = 64       # 批次大小
+learning_rate = 0.001 # 学习率
+bsp_weight = 2.0      # 买卖点头权重（提升召回）
+val_split = 0.1       # 验证集比例
+seed = 42             # 随机种子
+
+[loss_weights]
+return = 1.0          # 涨跌预测
+top_fractal = 0.3     # 顶分型
+bottom_fractal = 0.3  # 底分型
+bi_direction = 0.2    # 笔方向
+bi_strength = 0.1     # 笔强度
+zs_count = 0.1        # 中枢计数
+is_bsp = 0.5          # 买卖点标志
+bsp_direction = 0.3   # 买卖方向
+```
+
+参数优先级：**命令行参数 > 配置文件 > 代码默认值**。不传参数时自动读取 `config/default.toml`。
 
 ---
 
@@ -421,6 +464,28 @@ Candle 的 `candle-onnx` 不支持导出。如需 ONNX 格式，使用 Python �
 
 ---
 
+## 贡献
+
+欢迎提交 PR 和 Issue！
+
+```bash
+# 代码风格
+cargo fmt --all
+cargo clippy --all-targets -- -D warnings
+
+# 运行测试
+cargo test --all
+
+# 确保通过后再提交 PR
+```
+
+流程：
+1. Fork 仓库并创建特性分支
+2. 确保代码通过 `cargo fmt` + `cargo clippy`
+3. 提交 PR，描述改动内容和动机
+
+---
+
 ## 技术栈
 
 | 组件 | 选型 |
@@ -431,3 +496,11 @@ Candle 的 `candle-onnx` 不支持导出。如需 ONNX 格式，使用 Python �
 | 推理 | Candle 原生 (.safetensors) / ONNX Runtime (ort v2.0) |
 | GPU | 可选 Metal (default feature) / CUDA |
 | Rust | Edition 2024, 工具链 ≥ 1.80 |
+
+---
+
+## 许可证
+
+MIT License © 2024–2025 Johana Ĉen
+
+本项目基于 [MIT License](LICENSE) 开源。可自由使用、修改、分发，需保留版权声明。
