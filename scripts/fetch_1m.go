@@ -207,7 +207,15 @@ func downloadSymbol(client *http.Client, symbol string, fullMonths []string, cur
 	}
 	allRows = unique
 
-	// ── 第 4 步: 时间戳转可读格式 → 写 CSV ──
+	// ── 第 4 步: 填充缺失的 1m 间隙（前值填充）──
+	beforeFill := len(allRows)
+	allRows = fillGaps(allRows)
+	filledCount := len(allRows) - beforeFill
+	if filledCount > 0 {
+		fmt.Printf("     %s: 前值填充 %d 根缺失 K 线\n", symbol, filledCount)
+	}
+
+	// ── 第 5 步: 时间戳转可读格式 → 写 CSV ──
 	outPath := filepath.Join(outDir, fmt.Sprintf("%s_1m.csv", symbol))
 	f, err := os.Create(outPath)
 	if err != nil {
@@ -217,13 +225,13 @@ func downloadSymbol(client *http.Client, symbol string, fullMonths []string, cur
 	defer f.Close()
 
 	w := csv.NewWriter(f)
-		for _, kr := range allRows {
-			// 第 0 列从 Unix ms 转可读格式
-			tsMs, _ := strconv.ParseInt(kr.row[0], 10, 64)
-			if tsMs > 1_000_000_000_000_000 { // 微秒→毫秒 安全兜底
-				tsMs /= 1000
-			}
-			readable := time.UnixMilli(tsMs).UTC().Format("2006-01-02 15:04:05")
+	for _, kr := range allRows {
+		// 第 0 列从 Unix ms 转可读格式
+		tsMs, _ := strconv.ParseInt(kr.row[0], 10, 64)
+		if tsMs > 1_000_000_000_000_000 { // 微秒→毫秒 安全兜底
+			tsMs /= 1000
+		}
+		readable := time.UnixMilli(tsMs).UTC().Format("2006-01-02 15:04:05")
 		outRow := []string{readable, kr.row[1], kr.row[2], kr.row[3], kr.row[4], kr.row[5]}
 		if err := w.Write(outRow); err != nil {
 			log.Printf("  ❌ %s 写入失败: %v", symbol, err)
@@ -236,7 +244,7 @@ func downloadSymbol(client *http.Client, symbol string, fullMonths []string, cur
 		return
 	}
 
-	// 时序完整性检查
+	// 时序完整性检查（填充后应无间隔异常）
 	checkContinuity(allRows, symbol)
 
 	fmt.Printf("  ✅ %s 1m: %d 根 K 线 → %s\n", symbol, len(allRows), outPath)
@@ -343,23 +351,54 @@ func parseBinanceCSV(r io.Reader) [][]string {
 			continue
 		}
 
-			rawTs, err := strconv.ParseInt(record[0], 10, 64)
-			if err != nil {
-				continue
-			}
+		rawTs, err := strconv.ParseInt(record[0], 10, 64)
+		if err != nil {
+			continue
+		}
 
-			// Binance Data Portal 在 2025 年初把时间戳从毫秒(13位)改成了微秒(16位)
-			if rawTs > 1_000_000_000_000_000 { // > 1e15 = 微秒
-				rawTs /= 1000
-			}
+		// Binance Data Portal 在 2025 年初把时间戳从毫秒(13位)改成了微秒(16位)
+		if rawTs > 1_000_000_000_000_000 { // > 1e15 = 微秒
+			rawTs /= 1000
+		}
 
-			row := []string{
-				strconv.FormatInt(rawTs, 10),
-				record[1], record[2], record[3], record[4], record[5],
-			}
+		row := []string{
+			strconv.FormatInt(rawTs, 10),
+			record[1], record[2], record[3], record[4], record[5],
+		}
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// fillGaps 用前值填充缺失的 1m K 线（按 60s 间隔）
+func fillGaps(rows []klineRow) []klineRow {
+	if len(rows) < 2 {
+		return rows
+	}
+
+	filled := make([]klineRow, 0, len(rows))
+	filled = append(filled, rows[0])
+
+	for i := 1; i < len(rows); i++ {
+		prev := filled[len(filled)-1]
+		curr := rows[i]
+
+		// 逐分钟填充 gap
+		for ts := prev.ts + 60000; ts < curr.ts; ts += 60000 {
+			newRow := klineRow{
+				ts: ts,
+				row: []string{
+					strconv.FormatInt(ts, 10),
+					prev.row[1], prev.row[2], prev.row[3], prev.row[4], prev.row[5],
+				},
+			}
+			filled = append(filled, newRow)
+		}
+
+		filled = append(filled, curr)
+	}
+
+	return filled
 }
 
 // checkContinuity 检查 1m K 线是否连续（每根间隔 60s）
