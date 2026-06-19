@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.so
+
+# 数据文件
+data/processed/*.csv
+data/labels/*.parquet
+
+# 模型文件
+checkpoints/*.pt
+
+# ONNX
+*.onnx
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+
+# Go
+examples/go/inference/chan_distill.onnx
