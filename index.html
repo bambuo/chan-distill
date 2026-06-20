@@ -1,0 +1,1627 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>缠论K线分析系统</title>
+<link rel="stylesheet" href="https://unpkg.com/@arco-design/web-vue@2.58.0/dist/arco.css" crossorigin="anonymous">
+<style>
+:root {
+  --bg: #1a1d23;
+  --panel-bg: #21252b;
+  --border: #333842;
+  --text: #dcdfe6;
+  --text-secondary: #878d96;
+  --green: #26a69a;
+  --red: #ef5350;
+  --blue: #5c8aff;
+  --gold: #f5a623;
+  --purple: #ab47bc;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  height: 100vh; overflow: hidden;
+}
+#app {
+  height: 100vh; display: flex; flex-direction: column;
+}
+/* 顶部控制栏 */
+.control-bar {
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--border);
+  padding: 8px 16px;
+  display: flex; align-items: center; gap: 12px;
+  flex-wrap: wrap; min-height: 44px; z-index: 5;
+}
+.control-bar .label {
+  color: var(--text-secondary); font-size: 13px; white-space: nowrap;
+}
+.ctrl-sep {
+  width: 1px; height: 20px;
+  background: var(--border);
+  margin: 0 4px; flex-shrink: 0;
+}
+.coin-btn-group .arco-btn { min-width: 64px; }
+.period-btn-group .arco-btn { min-width: 44px; padding: 2px 10px; }
+.step-group .arco-checkbox { margin-right: 4px; }
+
+/* 图表容器 */
+.chart-container {
+  flex: 1; position: relative; overflow: hidden;
+  min-height: 300px;
+}
+.chart-legend {
+  position: absolute; top: 8px; left: 12px; z-index: 5;
+  background: rgba(33,37,43,0.85);
+  border: 1px solid var(--border);
+  border-radius: 4px; padding: 6px 10px;
+  display: flex; flex-direction: column; gap: 2px;
+  font-size: 11px; color: var(--text-secondary);
+  pointer-events: none;
+}
+.chart-legend .legend-row { display: flex; align-items: center; gap: 5px; }
+.chart-legend .legend-dot { width: 8px; height: 3px; border-radius: 1px; flex-shrink: 0; }
+.chart-legend .legend-dot.bi-up   { background: var(--blue); }
+.chart-legend .legend-dot.bi-down { background: var(--gold); }
+.chart-legend .legend-dot.bi-virtual { background: rgba(255,255,255,0.55); }
+.chart-legend .legend-dot.segment { background: var(--purple); width: 10px; height: 2.5px; }
+.chart-legend .legend-dot.pivot   { background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.30); width: 10px; height: 10px; }
+
+/* 右侧缠论算法状态飘窗 */
+.chan-panel {
+  position: absolute; top: 8px; right: 12px; z-index: 5;
+  background: rgba(33,37,43,0.92);
+  border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px 14px;
+  min-width: 220px; max-width: 260px;
+  font-size: 12px; color: var(--text-secondary);
+  pointer-events: none;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.chan-panel-title {
+  font-size: 13px; font-weight: bold; color: var(--text);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px; margin-bottom: 2px;
+}
+.chan-panel-section {
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.chan-panel-section:last-child { border-bottom: none; }
+.chan-panel-step {
+  color: #a0a8ff; font-weight: 600; font-size: 12px; margin-bottom: 2px;
+}
+.chan-panel-desc {
+  color: #6a7080; font-size: 10px; margin-bottom: 2px;
+}
+.chan-panel-meta {
+  font-size: 11px; line-height: 1.5;
+}
+.chan-panel-meta b { color: var(--text); }
+.chan-panel-meta.trend-result {
+  font-weight: bold; font-size: 13px; margin-top: 2px;
+}
+.chan-panel-meta.trend-result.up   { color: var(--green); }
+.chan-panel-meta.trend-result.down { color: var(--red); }
+.chan-panel-meta.trend-result.consolidation { color: var(--gold); }
+
+/* 加载和错误 */
+.chart-loading {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(26,29,35,0.85); z-index: 10;
+}
+.chart-error {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: rgba(26,29,35,0.9); z-index: 10; gap: 12px;
+}
+.chart-error .error-msg { color: var(--red); font-size: 15px; }
+.chart-error .error-hint { color: var(--text-secondary); font-size: 13px; max-width: 480px; text-align: center; line-height: 1.6; }
+
+/* 底部状态栏 */
+.status-bar {
+  background: var(--panel-bg);
+  border-top: 1px solid var(--border);
+  padding: 3px 16px;
+  display: flex; align-items: center; gap: 12px;
+  font-size: 12px; color: var(--text-secondary);
+  min-height: 26px;
+}
+.status-bar .trend-tag { font-weight: bold; font-size: 13px; }
+.status-bar .trend-tag.up   { color: var(--green); }
+.status-bar .trend-tag.down { color: var(--red); }
+.status-bar .trend-tag.consolidation { color: var(--gold); }
+
+/* Arco 暗色覆写 */
+.arco-btn-secondary { background: #2a2d35 !important; color: #dcdfe6 !important; border-color: #333842 !important; }
+.arco-btn-secondary:hover { background: #353a46 !important; border-color: #555b6e !important; }
+.arco-btn-secondary.arco-btn-selected,
+.arco-btn-primary { background: #3a6ff6 !important; color: #fff !important; border-color: #3a6ff6 !important; }
+.arco-checkbox-label { color: var(--text) !important; font-size: 13px !important; }
+.arco-checkbox { --color-primary-6: #3a6ff6; }
+.arco-spin .arco-spin-tip { color: var(--text-secondary) !important; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="control-bar">
+    <span class="label">币种</span>
+    <a-button-group class="coin-btn-group" size="small">
+      <a-button v-for="c in coins" :key="c"
+        :type="selectedCoin === c ? 'primary' : 'secondary'"
+        @click="switchCoin(c)">{{ c.replace('USDT','') }}</a-button>
+    </a-button-group>
+    <span class="ctrl-sep"></span>
+    <span class="label">周期</span>
+    <a-button-group class="period-btn-group" size="small">
+      <a-button v-for="p in periods" :key="p"
+        :type="selectedPeriod === p ? 'primary' : 'secondary'"
+        @click="switchPeriod(p)">{{ p }}</a-button>
+    </a-button-group>
+    <span class="ctrl-sep"></span>
+    <span class="label">笔模式</span>
+    <a-button-group class="period-btn-group" size="small">
+      <a-button v-for="m in biModes" :key="m.key"
+        :type="selectedBiMode === m.key ? 'primary' : 'secondary'"
+        @click="switchBiMode(m.key)">{{ m.label }}</a-button>
+    </a-button-group>
+    <a-checkbox v-model="showVirtualBi" @change="onStepsChange">显示虚笔</a-checkbox>
+    <span class="ctrl-sep"></span>
+    <span class="label">缠论分析</span>
+    <a-checkbox-group class="step-group" v-model="selectedSteps" @change="onStepsChange">
+      <a-checkbox v-for="s in chanSteps" :key="s.key" :value="s.key">{{ s.label }}</a-checkbox>
+    </a-checkbox-group>
+  </div>
+
+  <div class="chart-container" ref="chartContainer">
+    <div class="chart-legend" v-if="selectedSteps.length > 0">
+      <div class="legend-row" v-if="selectedSteps.includes('bi')"><div class="legend-dot bi-up"></div><span>笔(上)</span></div>
+      <div class="legend-row" v-if="selectedSteps.includes('bi')"><div class="legend-dot bi-down"></div><span>笔(下)</span></div>
+      <div class="legend-row" v-if="selectedSteps.includes('bi') && showVirtualBi"><div class="legend-dot bi-virtual"></div><span>虚笔</span></div>
+      <div class="legend-row" v-if="selectedSteps.includes('segment')"><div class="legend-dot segment"></div><span>线段</span></div>
+      <div class="legend-row" v-if="selectedSteps.includes('pivot')"><div class="legend-dot pivot"></div><span>中枢</span></div>
+    </div>
+    <!-- 右侧算法状态飘窗 -->
+    <div class="chan-panel" v-if="selectedSteps.length > 0">
+      <div class="chan-panel-title">缠论算法状态</div>
+      <div class="chan-panel-section" v-if="selectedSteps.includes('bi')">
+        <div class="chan-panel-step">◈ 笔识别</div>
+        <div class="chan-panel-desc">包含处理 → 分型识别 → 笔构建</div>
+        <div class="chan-panel-meta">模式 <b>{{ currentBiModeLabel }}</b><span v-if="chanMeta.hasVirtualBi"> · 虚笔显示中</span></div>
+        <div class="chan-panel-meta">顶分型 {{ chanMeta.topCount }} · 底分型 {{ chanMeta.bottomCount }}</div>
+        <div class="chan-panel-meta">已识别 <b>{{ chanMeta.biCount }}</b> 笔
+          <span style="color:#5c8aff">(上 {{ chanMeta.biUpCount }})</span>
+          <span style="color:#f5a623">(下 {{ chanMeta.biDownCount }})</span>
+        </div>
+      </div>
+      <div class="chan-panel-section" v-if="selectedSteps.includes('segment')">
+        <div class="chan-panel-step">◈ 线段划分</div>
+        <div class="chan-panel-desc">至少3笔构成一线段</div>
+        <div class="chan-panel-meta">已构建 <b>{{ chanMeta.segCount }}</b> 条线段</div>
+      </div>
+      <div class="chan-panel-section" v-if="selectedSteps.includes('pivot')">
+        <div class="chan-panel-step">◈ 中枢构建</div>
+        <div class="chan-panel-desc">3段重叠区间 → ZD/ZG</div>
+        <div class="chan-panel-meta">中枢数量 <b>{{ chanMeta.pivCount }}</b></div>
+        <div class="chan-panel-meta" v-if="chanMeta.lastPivot">
+          ZG {{ chanMeta.lastPivotZg }} · ZD {{ chanMeta.lastPivotZd }}
+        </div>
+      </div>
+      <div class="chan-panel-section" v-if="selectedSteps.includes('trend')">
+        <div class="chan-panel-step">◈ 走势类型判定</div>
+        <div class="chan-panel-desc">价格与中枢位置比较判定走势</div>
+        <div class="chan-panel-meta trend-result" :class="trendClass">{{ trendLabel }}</div>
+      </div>
+      <div class="chan-panel-section" v-if="selectedSteps.includes('bsp')">
+        <div class="chan-panel-step">◈ 买卖点识别</div>
+        <div class="chan-panel-desc">突破/支撑/压力/三买三卖</div>
+        <div class="chan-panel-meta">共 <b>{{ chanMeta.bspCount }}</b> 个信号</div>
+        <div class="chan-panel-meta" v-if="chanMeta.bspBuy3+chanMeta.bspSell3>0">
+          <span style="color:#00e676">三买 {{ chanMeta.bspBuy3 }}</span>
+          <span style="color:#ff1744"> 三卖 {{ chanMeta.bspSell3 }}</span>
+        </div>
+        <div class="chan-panel-meta">
+          <span style="color:#4caf50">支撑 {{ chanMeta.bspSupp }}</span>
+          <span style="color:#f44336"> 压力 {{ chanMeta.bspResist }}</span>
+        </div>
+        <div class="chan-panel-meta">
+          <span style="color:#69f0ae">突破 {{ chanMeta.bspBreakUp }}</span>
+          <span style="color:#ff5252"> 跌破 {{ chanMeta.bspBreakDn }}</span>
+        </div>
+      </div>
+    </div>
+    <div class="chart-loading" v-if="loading">
+      <a-spin :loading="true" tip="加载数据中..." />
+    </div>
+    <div class="chart-error" v-if="error">
+      <div class="error-msg">{{ error }}</div>
+      <div class="error-hint">
+        请通过本地HTTP服务器运行此页面（不要直接双击打开HTML文件）<br/>
+        终端执行：<code style="background:#333;padding:2px 6px;border-radius:3px;">python3 -m http.server 8080</code><br/>
+        然后访问：<code style="background:#333;padding:2px 6px;border-radius:3px;">http://localhost:8080</code>
+      </div>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <span>{{ selectedCoin }} · {{ selectedPeriod }} · {{ periodData.length }} 根K线</span>
+    <span v-if="trendLabel" :class="'trend-tag ' + trendClass">{{ trendLabel }}</span>
+  </div>
+</div>
+
+<script src="https://unpkg.com/vue@3.4.21/dist/vue.global.prod.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@arco-design/web-vue@2.58.0/dist/arco-vue.min.js" crossorigin="anonymous"></script>
+
+<script type="importmap">
+{ "imports": { "lightweight-charts": "https://unpkg.com/lightweight-charts@5.0.3/dist/lightweight-charts.standalone.production.mjs" } }
+</script>
+
+<script type="module">
+import { createChart, CandlestickSeries, HistogramSeries } from 'lightweight-charts';
+
+// ===================================================================
+//  模块一：CSV 解析器
+// ===================================================================
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  if (lines.length < 2) return [];
+  const candles = [];
+  for (let i = 1; i < lines.length; i++) {
+    const parts = lines[i].split(',');
+    if (parts.length < 6) continue;
+    const ts = new Date(parts[0].replace(' ', 'T') + 'Z');
+    candles.push({
+      time: ts.getTime(),
+      open: parseFloat(parts[1]),
+      high: parseFloat(parts[2]),
+      low: parseFloat(parts[3]),
+      close: parseFloat(parts[4]),
+      volume: parseFloat(parts[5]),
+    });
+  }
+  return candles;
+}
+
+// ===================================================================
+//  模块二：周期聚合器
+// ===================================================================
+const PERIOD_MINUTES = { '1m': 1, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '4h': 240, '1d': 1440, '1w': 10080 };
+
+function aggregateCandles(source, periodKey) {
+  if (!source || source.length === 0) return [];
+  if (periodKey === '1m') return source.slice();
+  const minutes = PERIOD_MINUTES[periodKey];
+  const result = [];
+  let bucket = null, bucketStart = null;
+  for (const c of source) {
+    const bucketTs = Math.floor(c.time / (minutes * 60000)) * (minutes * 60000);
+    if (bucketTs !== bucketStart) {
+      if (bucket) result.push({ ...bucket });
+      bucketStart = bucketTs;
+      bucket = { time: bucketTs, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume };
+    } else {
+      bucket.high = Math.max(bucket.high, c.high);
+      bucket.low = Math.min(bucket.low, c.low);
+      bucket.close = c.close;
+      bucket.volume += c.volume;
+    }
+  }
+  if (bucket) result.push({ ...bucket });
+  return result;
+}
+
+// ===================================================================
+//  模块三：缠论分析引擎
+// ===================================================================
+
+// 3.1 包含处理：严格按文档算法
+function processInclusions(candles) {
+  if (candles.length < 2) return candles.slice();
+  const source = candles; // 保留原始K线用于方向判定
+  const result = [source[0]];
+  let direction = 'up'; // 初始方向
+
+  for (let i = 1; i < source.length; i++) {
+    const prev = result[result.length - 1];
+    const curr = source[i];
+
+    // 包含判定：(H_a ≤ H_b ∧ L_a ≥ L_b) ∨ (H_a ≥ H_b ∧ L_a ≤ L_b)
+    const aContainsB = curr.high <= prev.high && curr.low >= prev.low;
+    const bContainsA = curr.high >= prev.high && curr.low <= prev.low;
+
+    if (aContainsB || bContainsA) {
+      if (direction === 'up') {
+        // 向上：取高高 = max(Ha, Hb), max(La, Lb)
+        result[result.length - 1] = {
+          ...prev,
+          high: Math.max(prev.high, curr.high),
+          low: Math.max(prev.low, curr.low),
+        };
+      } else {
+        // 向下：取低低 = min(Ha, Hb), min(La, Lb)
+        result[result.length - 1] = {
+          ...prev,
+          high: Math.min(prev.high, curr.high),
+          low: Math.min(prev.low, curr.low),
+        };
+      }
+    } else {
+      result.push(curr);
+    }
+
+    // 方向判定：用原始K线高点/低点比较
+    if (i >= 1) {
+      if (source[i].high > source[i - 1].high) {
+        direction = 'up';
+      } else if (source[i].low < source[i - 1].low) {
+        direction = 'down';
+      }
+      // 否则方向不变
+    }
+  }
+  return result;
+}
+
+// 3.2 分型识别：严格按文档算法（全部严格比较，同一K线不可同时为顶底）
+function identifyFractals(candles) {
+  const tops = [], bottoms = [];
+  const data = processInclusions(candles);
+
+  if (data.length < 3) return { tops, bottoms, data };
+
+  for (let i = 1; i < data.length - 1; i++) {
+    const prev = data[i - 1], curr = data[i], next = data[i + 1];
+
+    // 顶分型：中间K线高点最高，且低点也最高
+    if (curr.high > prev.high && curr.high > next.high &&
+        curr.low > prev.low && curr.low > next.low) {
+      tops.push({ index: i, candle: curr, time: curr.time, high: curr.high, low: curr.low });
+    }
+    // 底分型：中间K线低点最低，且高点也最低（else if 确保互斥）
+    else if (curr.low < prev.low && curr.low < next.low &&
+             curr.high < prev.high && curr.high < next.high) {
+      bottoms.push({ index: i, candle: curr, time: curr.time, high: curr.high, low: curr.low });
+    }
+  }
+  // 查重：输出顶底分型时间冲突统计
+  const topTimes = new Set(tops.map(t => t.time));
+  const bottomTimes = new Set(bottoms.map(b => b.time));
+  const conflictTimes = [...topTimes].filter(t => bottomTimes.has(t));
+  if (conflictTimes.length > 0) {
+    console.warn('顶底分型时间冲突 ' + conflictTimes.length + ' 处:', conflictTimes);
+  } else {
+    console.log('分型查重通过: 无时间冲突 (顶' + tops.length + ' 底' + bottoms.length + ')');
+  }
+  return { tops, bottoms, data };
+}
+
+const BI_MODE_CONFIGS = {
+  loose: { minSpan: 2, fxCheck: 'none', endIsPeak: false },
+  standard: { minSpan: 3, fxCheck: 'half', endIsPeak: true },
+  strict: { minSpan: 4, fxCheck: 'strict', endIsPeak: true },
+};
+
+function getBiConfig(options) {
+  return BI_MODE_CONFIGS[options?.biMode] || BI_MODE_CONFIGS.standard;
+}
+
+function mergeTypedFractals(fractals) {
+  const typed = [];
+  for (const top of fractals.tops || []) typed.push({ ...top, type: 'top' });
+  for (const bottom of fractals.bottoms || []) typed.push({ ...bottom, type: 'bottom' });
+  return typed.sort((a, b) => a.index - b.index);
+}
+
+function isMoreExtremeFractal(candidate, current) {
+  if (candidate.type === 'top') return candidate.candle.high > current.candle.high;
+  return candidate.candle.low < current.candle.low;
+}
+
+function addAlternatingFractal(sequence, fractal) {
+  if (sequence.length === 0) {
+    sequence.push(fractal);
+    return;
+  }
+
+  const last = sequence[sequence.length - 1];
+  if (fractal.type !== last.type) {
+    sequence.push(fractal);
+    return;
+  }
+
+  if (isMoreExtremeFractal(fractal, last)) {
+    sequence[sequence.length - 1] = fractal;
+  }
+}
+
+function buildAlternatingFractals(fractals) {
+  const sequence = [];
+  for (const fractal of mergeTypedFractals(fractals)) {
+    addAlternatingFractal(sequence, fractal);
+  }
+  return sequence;
+}
+
+function hasEnoughIndependentKLines(start, end, config) {
+  return Math.abs(end.index - start.index) >= config.minSpan;
+}
+
+function hasValidBiPriceRange(start, end) {
+  if (start.type === 'bottom') {
+    return end.candle.high > start.candle.low;
+  }
+  return end.candle.low < start.candle.high;
+}
+
+function isValidBiFxPair(start, end, data, config) {
+  if (config.fxCheck === 'none') return true;
+  const startPrev = data[start.index - 1] || start.candle;
+  const startNext = data[start.index + 1] || start.candle;
+  const endPrev = data[end.index - 1] || end.candle;
+  const endNext = data[end.index + 1] || end.candle;
+
+  if (start.type === 'bottom') {
+    const endLow = config.fxCheck === 'strict'
+      ? Math.min(endPrev.low, end.candle.low, endNext.low)
+      : Math.min(endPrev.low, end.candle.low);
+    const startHigh = config.fxCheck === 'strict'
+      ? Math.max(startPrev.high, start.candle.high, startNext.high)
+      : Math.max(start.candle.high, startNext.high);
+    return start.candle.low < endLow && end.candle.high > startHigh;
+  }
+
+  const endHigh = config.fxCheck === 'strict'
+    ? Math.max(endPrev.high, end.candle.high, endNext.high)
+    : Math.max(endPrev.high, end.candle.high);
+  const startLow = config.fxCheck === 'strict'
+    ? Math.min(startPrev.low, start.candle.low, startNext.low)
+    : Math.min(start.candle.low, startNext.low);
+  return start.candle.high > endHigh && end.candle.low < startLow;
+}
+
+function isBiEndPeak(start, end, data) {
+  const from = Math.min(start.index, end.index);
+  const to = Math.max(start.index, end.index);
+  const range = data.slice(from, to + 1);
+  if (start.type === 'bottom') {
+    return end.candle.high >= Math.max(...range.map(c => c.high));
+  }
+  return end.candle.low <= Math.min(...range.map(c => c.low));
+}
+
+function canBuildBi(start, end, data, config) {
+  if (!hasEnoughIndependentKLines(start, end, config)) return false;
+  if (!hasValidBiPriceRange(start, end)) return false;
+  if (!isValidBiFxPair(start, end, data, config)) return false;
+  if (config.endIsPeak && !isBiEndPeak(start, end, data)) return false;
+  return true;
+}
+
+function getFractalPrice(fractal) {
+  return fractal.type === 'top' ? fractal.candle.high : fractal.candle.low;
+}
+
+function createBi(start, end, isVirtual = false) {
+  return {
+    from: start,
+    to: end,
+    fromIdx: start.index,
+    toIdx: end.index,
+    direction: start.type === 'bottom' ? 'up' : 'down',
+    fromPrice: getFractalPrice(start),
+    toPrice: getFractalPrice(end),
+    isVirtual,
+  };
+}
+
+// 3.3 笔构建：严格按文档算法
+function buildBi(fractals, options = {}) {
+  const config = getBiConfig(options);
+  const alternatingFractals = buildAlternatingFractals(fractals);
+  const biList = [];
+
+  for (let i = 0; i < alternatingFractals.length - 1; i++) {
+    const start = alternatingFractals[i];
+    const end = alternatingFractals[i + 1];
+    if (canBuildBi(start, end, fractals.data, config)) biList.push(createBi(start, end));
+  }
+
+  return biList;
+}
+
+function buildVirtualBi(candles, biList) {
+  const lastBi = biList[biList.length - 1];
+  if (!lastBi || !candles || candles.length === 0) return null;
+
+  const start = lastBi.to;
+  const tail = candles.filter(c => c.time > start.candle.time);
+  if (tail.length === 0) return null;
+
+  if (start.type === 'top') {
+    const endCandle = tail.reduce((min, c) => c.low < min.low ? c : min, tail[0]);
+    if (endCandle.low >= start.candle.low) return null;
+    return createBi(start, {
+      type: 'bottom', candle: endCandle, time: endCandle.time,
+      index: start.index + tail.indexOf(endCandle) + 1,
+      high: endCandle.high, low: endCandle.low,
+    }, true);
+  }
+
+  const endCandle = tail.reduce((max, c) => c.high > max.high ? c : max, tail[0]);
+  if (endCandle.high <= start.candle.high) return null;
+  return createBi(start, {
+    type: 'top', candle: endCandle, time: endCandle.time,
+    index: start.index + tail.indexOf(endCandle) + 1,
+    high: endCandle.high, low: endCandle.low,
+  }, true);
+}
+
+function collectBiFractals(biList) {
+  const tops = [], bottoms = [];
+  const seen = new Set();
+
+  for (const bi of biList || []) {
+    for (const f of [bi.from, bi.to]) {
+      if (!f || !f.type) continue;
+      const key = f.type + ':' + f.index + ':' + f.time;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      if (f.type === 'top') tops.push(f);
+      else if (f.type === 'bottom') bottoms.push(f);
+    }
+  }
+
+  tops.sort((a, b) => a.index - b.index);
+  bottoms.sort((a, b) => a.index - b.index);
+  return { tops, bottoms };
+}
+
+// 3.4 特征序列工具函数（文档第4节）
+const SEGMENT_MIN_BI_COUNT = 3;
+const SEGMENT_BREAK_MIN_BI_COUNT = 5;
+const FEATURE_FRACTAL_MIN_COUNT = 3;
+
+function oppositeDirection(direction) {
+  return direction === 'up' ? 'down' : 'up';
+}
+
+function strokeToFeature(s) {
+  return { high: Math.max(s.fromPrice, s.toPrice), low: Math.min(s.fromPrice, s.toPrice) };
+}
+
+function processFeatureInclusions(features, procDir) {
+  if (features.length < 2) return features.slice();
+  const result = [features[0]];
+  for (let i = 1; i < features.length; i++) {
+    const prev = result[result.length - 1];
+    const curr = features[i];
+    const aContainsB = curr.high <= prev.high && curr.low >= prev.low;
+    const bContainsA = curr.high >= prev.high && curr.low <= prev.low;
+    if (aContainsB || bContainsA) {
+      if (procDir === 'up') {
+        result[result.length - 1] = { high: Math.max(prev.high, curr.high), low: Math.max(prev.low, curr.low) };
+      } else {
+        result[result.length - 1] = { high: Math.min(prev.high, curr.high), low: Math.min(prev.low, curr.low) };
+      }
+    } else {
+      result.push(curr);
+    }
+  }
+  return result;
+}
+
+function hasFeatureFractal(features, type) {
+  // 特征序列分型：顶分型只需看高点，底分型只需看低点（文档第4节）
+  if (features.length < FEATURE_FRACTAL_MIN_COUNT) return false;
+  for (let i = 1; i < features.length - 1; i++) {
+    const L = features[i - 1], M = features[i], R = features[i + 1];
+    if (type === 'top') {
+      if (M.high > L.high && M.high > R.high) return true;
+    } else {
+      if (M.low < L.low && M.low < R.low) return true;
+    }
+  }
+  return false;
+}
+
+function getOppositeStrokes(strokes, direction) {
+  return strokes.filter(s => s.direction !== direction);
+}
+
+function getSegmentFeatureSequence(strokes, direction) {
+  const oppositeStrokes = getOppositeStrokes(strokes, direction);
+  const features = oppositeStrokes.map(strokeToFeature);
+  const processDir = oppositeDirection(direction);
+
+  return {
+    oppositeStrokes,
+    processedFeatures: processFeatureInclusions(features, processDir),
+  };
+}
+
+function getSegmentFractalType(direction) {
+  return direction === 'up' ? 'top' : 'bottom';
+}
+
+function hasDirectBreak(strokes, oppositeStrokes, direction) {
+  for (const oppositeStroke of oppositeStrokes) {
+    const oppositeIndex = strokes.indexOf(oppositeStroke);
+    if (oppositeIndex < 2) continue;
+
+    const previousSameDirectionStroke = strokes[oppositeIndex - 2];
+    if (!previousSameDirectionStroke || previousSameDirectionStroke.direction !== direction) continue;
+
+    if (direction === 'up' && oppositeStroke.toPrice < previousSameDirectionStroke.fromPrice) return true;
+    if (direction === 'down' && oppositeStroke.toPrice > previousSameDirectionStroke.fromPrice) return true;
+  }
+  return false;
+}
+
+function hasFeatureOverlap(features) {
+  for (let i = 0; i < features.length - 1; i++) {
+    const current = features[i];
+    const next = features[i + 1];
+    if (current.high >= next.low && current.low <= next.high) return true;
+  }
+  return false;
+}
+
+function createSegmentState(firstStroke) {
+  return {
+    strokes: [firstStroke],
+    direction: firstStroke.direction,
+  };
+}
+
+function pushSegmentIfValid(segments, strokes, direction, biList) {
+  const normalized = normalizeSegmentStrokes(strokes, direction);
+  if (normalized.length < SEGMENT_MIN_BI_COUNT) return;
+  segments.push(makeSegmentObj(normalized, direction, biList));
+}
+
+function normalizeSegmentStrokes(strokes, direction) {
+  let end = strokes.length;
+  while (end > 0 && strokes[end - 1].direction !== direction) end--;
+  return strokes.slice(0, end);
+}
+
+function splitSegmentOnBreak(strokes, direction) {
+  const lastStroke = strokes[strokes.length - 1];
+  const completedEnd = lastStroke.direction === direction
+    ? strokes.length - 2
+    : strokes.length - 1;
+
+  return {
+    completedStrokes: strokes.slice(0, completedEnd),
+    nextStrokes: strokes.slice(completedEnd),
+    nextDirection: oppositeDirection(direction),
+  };
+}
+
+// 3.5 线段划分：严格按文档第5节算法
+function buildSegments(biList) {
+  if (biList.length < SEGMENT_MIN_BI_COUNT) return [];
+
+  const segments = [];
+  let state = createSegmentState(biList[0]);
+
+  for (let i = 1; i < biList.length; i++) {
+    state.strokes.push(biList[i]);
+
+    if (isSegmentBroken(state.strokes, state.direction)) {
+      const split = splitSegmentOnBreak(state.strokes, state.direction);
+      pushSegmentIfValid(segments, split.completedStrokes, state.direction, biList);
+      state = {
+        strokes: split.nextStrokes,
+        direction: split.nextDirection,
+      };
+    }
+  }
+
+  pushSegmentIfValid(segments, state.strokes, state.direction, biList);
+
+  return segments;
+}
+
+function isSegmentBroken(strokes, direction) {
+  if (strokes.length < SEGMENT_BREAK_MIN_BI_COUNT) return false;
+
+  const { oppositeStrokes, processedFeatures } = getSegmentFeatureSequence(strokes, direction);
+  if (oppositeStrokes.length < FEATURE_FRACTAL_MIN_COUNT) return false;
+
+  const fractalType = getSegmentFractalType(direction);
+  if (!hasFeatureFractal(processedFeatures, fractalType)) return false;
+
+  return hasDirectBreak(strokes, oppositeStrokes, direction) ||
+    hasFeatureOverlap(processedFeatures);
+}
+
+function getSegmentRange(strokes) {
+  const highs = strokes.map(s => Math.max(s.fromPrice, s.toPrice));
+  const lows = strokes.map(s => Math.min(s.fromPrice, s.toPrice));
+  return {
+    high: Math.max(...highs),
+    low: Math.min(...lows),
+  };
+}
+
+function getSegmentBiIndices(strokes, biList) {
+  return strokes.map(s => biList.indexOf(s));
+}
+
+function makeSegmentObj(strokes, direction, biList) {
+  const range = getSegmentRange(strokes);
+  return {
+    startBi: strokes[0],
+    endBi: strokes[strokes.length - 1],
+    biIndices: getSegmentBiIndices(strokes, biList),
+    high: range.high,
+    low: range.low,
+    direction,
+  };
+}
+
+const PIVOT_MIN_SEGMENT_COUNT = 3;
+
+function getPivotOverlap(segments, startIndex) {
+  const seedSegments = segments.slice(startIndex, startIndex + PIVOT_MIN_SEGMENT_COUNT);
+  const zg = Math.min(...seedSegments.map(s => s.high));
+  const zd = Math.max(...seedSegments.map(s => s.low));
+
+  if (zg <= zd) return null;
+  return { zd, zg };
+}
+
+function createPivot(startIndex, overlap) {
+  return {
+    zd: overlap.zd,
+    zg: overlap.zg,
+    segIndices: [startIndex, startIndex + 1, startIndex + 2],
+    startIdx: startIndex,
+    endIdx: startIndex + 2,
+  };
+}
+
+function segmentOverlapsPivot(segment, pivot) {
+  return segment.high >= pivot.zd && segment.low <= pivot.zg;
+}
+
+function extendPivot(segments, pivot, startIndex) {
+  let index = startIndex;
+  while (index < segments.length && segmentOverlapsPivot(segments[index], pivot)) {
+    pivot.endIdx = index;
+    pivot.segIndices.push(index);
+    index++;
+  }
+  return index;
+}
+
+function tryBuildPivot(segments, startIndex) {
+  const overlap = getPivotOverlap(segments, startIndex);
+  if (!overlap) return null;
+
+  const pivot = createPivot(startIndex, overlap);
+  const nextIndex = extendPivot(segments, pivot, startIndex + PIVOT_MIN_SEGMENT_COUNT);
+  return { pivot, nextIndex };
+}
+
+// 3.6 中枢构建：严格按文档第6节算法
+function buildPivots(segments) {
+  if (segments.length < PIVOT_MIN_SEGMENT_COUNT) return [];
+
+  const pivots = [];
+  let index = 0;
+  while (index <= segments.length - PIVOT_MIN_SEGMENT_COUNT) {
+    const result = tryBuildPivot(segments, index);
+    if (!result) {
+      index++;
+      continue;
+    }
+
+    pivots.push(result.pivot);
+    index = result.nextIndex;
+  }
+
+  return pivots;
+}
+
+// 3.7 走势类型判定
+function determineTrend(pivots, candles) {
+  if (!pivots || pivots.length === 0) {
+    const dir = candles.length >= 2 ? (candles[candles.length - 1].close >= candles[0].close ? 'up' : 'down') : 'unknown';
+    return { direction: dir, label: dir === 'up' ? '上涨趋势' : '下跌趋势' };
+  }
+  const lastPivot = pivots[pivots.length - 1];
+  const lastPrice = candles[candles.length - 1].close;
+  if (lastPrice > lastPivot.zg) return { direction: 'up', label: '中枢上移·上涨趋势' };
+  if (lastPrice < lastPivot.zd) return { direction: 'down', label: '中枢下移·下跌趋势' };
+  return { direction: 'consolidation', label: '中枢震荡·盘整' };
+}
+
+const BSP_META = {
+  buy3:    { label: '三买', direction: 'buy' },
+  sell3:   { label: '三卖', direction: 'sell' },
+  support: { label: '支撑', direction: 'buy' },
+  resist:  { label: '压力', direction: 'sell' },
+  breakUp: { label: '突破', direction: 'buy' },
+  breakDn: { label: '跌破', direction: 'sell' },
+};
+
+function getBiRange(bi) {
+  return {
+    high: Math.max(bi.fromPrice, bi.toPrice),
+    low: Math.min(bi.fromPrice, bi.toPrice),
+  };
+}
+
+function createBSP(type, time, price) {
+  const meta = BSP_META[type];
+  return { type, time, price, label: meta.label, direction: meta.direction };
+}
+
+function formatBSPKeyPrice(price) {
+  return Number(price).toPrecision(12);
+}
+
+function addBSP(bsps, seen, bsp) {
+  const key = bsp.type + ':' + bsp.time + ':' + formatBSPKeyPrice(bsp.price);
+  if (seen.has(key)) return;
+  seen.add(key);
+  bsps.push(bsp);
+}
+
+function findThirdBuy(biList, startIndex, zg) {
+  for (let i = startIndex + 1; i < biList.length; i++) {
+    const bi = biList[i];
+    if (bi.direction !== 'down') continue;
+
+    const range = getBiRange(bi);
+    if (range.high < zg) return createBSP('buy3', bi.to.candle.time, range.low);
+  }
+  return null;
+}
+
+function findThirdSell(biList, startIndex, zd) {
+  for (let i = startIndex + 1; i < biList.length; i++) {
+    const bi = biList[i];
+    if (bi.direction !== 'up') continue;
+
+    const range = getBiRange(bi);
+    if (range.low > zd) return createBSP('sell3', bi.to.candle.time, range.high);
+  }
+  return null;
+}
+
+function addPivotBSP(bsps, seen, biList, pivot) {
+  const zg = pivot.zg;
+  const zd = pivot.zd;
+  const tolerance = (zg - zd) * 0.1;
+
+  for (let i = 0; i < biList.length - 1; i++) {
+    const bi = biList[i];
+    const range = getBiRange(bi);
+
+    if (bi.direction === 'up' && range.high > zg) {
+      const buy3 = findThirdBuy(biList, i, zg);
+      if (buy3) addBSP(bsps, seen, buy3);
+    }
+
+    if (bi.direction === 'down' && range.low < zd) {
+      const sell3 = findThirdSell(biList, i, zd);
+      if (sell3) addBSP(bsps, seen, sell3);
+    }
+
+    if (bi.direction === 'down' && Math.abs(range.low - zd) <= tolerance) {
+      addBSP(bsps, seen, createBSP('support', bi.to.candle.time, range.low));
+    }
+
+    if (bi.direction === 'up' && Math.abs(range.high - zg) <= tolerance) {
+      addBSP(bsps, seen, createBSP('resist', bi.to.candle.time, range.high));
+    }
+
+    if (bi.direction === 'up' && range.low < zg && range.high > zg) {
+      addBSP(bsps, seen, createBSP('breakUp', bi.to.candle.time, zg));
+    }
+
+    if (bi.direction === 'down' && range.low < zd && range.high > zd) {
+      addBSP(bsps, seen, createBSP('breakDn', bi.to.candle.time, zd));
+    }
+  }
+}
+
+// 3.8 买卖点识别（基于中枢区间和笔走势的多类型波段信号）
+function findBSP(biList, pivots) {
+  const bsps = [];
+  const seen = new Set();
+  if (!pivots || pivots.length === 0 || biList.length < 3) return bsps;
+
+  for (const pivot of pivots) {
+    addPivotBSP(bsps, seen, biList, pivot);
+  }
+
+  return bsps.sort((a, b) => a.time - b.time);
+}
+
+// 完整缠论分析
+function analyzeChanTheory(candles, steps, options = {}) {
+  const result = { bi: [], virtualBi: null, segments: [], pivots: [], trend: null, bsps: [], tops: [], bottoms: [] };
+  if (!candles || candles.length < 5) return result;
+  try {
+    const fractals = identifyFractals(candles);
+    if (steps.length === 0) return result;
+
+    result.bi = buildBi(fractals, options);
+    result.virtualBi = options.showVirtualBi ? buildVirtualBi(candles, result.bi) : null;
+
+    // 显示分型只展示参与成笔的有效端点，避免候选分型叠加到同一根K线。
+    const biFractals = collectBiFractals(result.bi);
+    result.tops = biFractals.tops;
+    result.bottoms = biFractals.bottoms;
+
+    if (result.bi.length >= 3 && (steps.includes('segment') || steps.includes('pivot') || steps.includes('trend') || steps.includes('bsp'))) {
+      result.segments = buildSegments(result.bi);
+      if (result.segments.length >= 3 && (steps.includes('pivot') || steps.includes('trend') || steps.includes('bsp'))) {
+        result.pivots = buildPivots(result.segments);
+        if (steps.includes('trend')) {
+          result.trend = determineTrend(result.pivots, candles);
+        }
+        if (steps.includes('bsp')) {
+          result.bsps = findBSP(result.bi, result.pivots);
+        }
+      }
+    }
+  } catch (e) {
+    console.error('缠论分析出错:', e);
+  }
+  return result;
+}
+
+// ===================================================================
+//  模块四：Lightweight Charts 图表管理 + Canvas叠加层
+// ===================================================================
+class ChartManager {
+  constructor(container) {
+    this.container = container;
+    this.chart = null;
+    this.candleSeries = null;
+    this.volumeSeries = null;
+    this.overlayCanvas = null;
+    this.overlayCtx = null;
+    this._chanData = null;   // { bi, segments, pivots }
+    this._showSteps = [];    // ['bi', 'segment', 'pivot']
+    this._candles = [];
+    this._redrawPending = false;
+  }
+
+  init() {
+    if (this.chart) return;
+
+    // 先创建叠加 Canvas
+    this._createOverlay();
+
+    this.chart = createChart(this.container, {
+      layout: {
+        background: { color: '#1a1d23' },
+        textColor: '#878d96',
+      },
+      grid: {
+        vertLines: { color: 'rgba(255,255,255,0.05)' },
+        horzLines: { color: 'rgba(255,255,255,0.05)' },
+      },
+      crosshair: { mode: 0 },
+      timeScale: {
+        borderColor: '#333842',
+        timeVisible: true,
+        secondsVisible: false,
+      },
+      rightPriceScale: {
+        borderColor: '#333842',
+        autoScale: true,
+        scaleMargins: { top: 0.05, bottom: 0.20 },
+      },
+      handleScroll: { vertTouchDrag: false },
+    });
+
+    this.candleSeries = this.chart.addSeries(CandlestickSeries, {
+      upColor: '#26a69a',
+      downColor: '#ef5350',
+      borderUpColor: '#26a69a',
+      borderDownColor: '#ef5350',
+      wickUpColor: '#26a69a',
+      wickDownColor: '#ef5350',
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+
+    this.volumeSeries = this.chart.addSeries(HistogramSeries, {
+      color: 'rgba(38,166,154,0.45)',
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'volume',
+    });
+    this.chart.priceScale('volume').applyOptions({
+      scaleMargins: { top: 0.82, bottom: 0 },
+    });
+
+    // 监听可视范围变化，重新绘制叠加层
+    this.chart.timeScale().subscribeVisibleTimeRangeChange(() => {
+      this._scheduleOverlayRedraw();
+    });
+    this.chart.timeScale().subscribeSizeChange(() => {
+      this._syncOverlaySize();
+      this._scheduleOverlayRedraw();
+    });
+  }
+
+  _createOverlay() {
+    this.overlayCanvas = document.createElement('canvas');
+    this.overlayCanvas.className = 'chan-overlay';
+    this.overlayCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:10;';
+    this.container.appendChild(this.overlayCanvas);
+    this.overlayCtx = this.overlayCanvas.getContext('2d');
+    this._syncOverlaySize();
+  }
+
+  _syncOverlaySize() {
+    if (!this.overlayCanvas || !this.container) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = this.container.clientWidth;
+    const h = this.container.clientHeight;
+    if (this.overlayCanvas.width !== w * dpr || this.overlayCanvas.height !== h * dpr) {
+      this.overlayCanvas.width = w * dpr;
+      this.overlayCanvas.height = h * dpr;
+      this.overlayCanvas.style.width = w + 'px';
+      this.overlayCanvas.style.height = h + 'px';
+    }
+  }
+
+  _scheduleOverlayRedraw() {
+    if (this._redrawPending) return;
+    this._redrawPending = true;
+    // 双 RAF 确保图表已完成渲染
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        this._redrawPending = false;
+        this._drawOverlay();
+      });
+    });
+  }
+
+  _drawOverlay() {
+    const ctx = this.overlayCtx;
+    const canvas = this.overlayCanvas;
+    if (!ctx || !canvas || !this.chart || !this._candles) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+
+    const data = this._chanData;
+    if (!data || !data.bi || data.bi.length === 0) return;
+
+    const ts = this.chart.timeScale();
+    const ser = this.candleSeries;
+
+    if (this._showSteps.includes('bi') && data.bi) {
+      drawBiLines(ctx, ts, ser, data.bi, this._candles);
+      if (data.virtualBi) drawVirtualBiLine(ctx, ts, ser, data.virtualBi);
+    }
+    if (this._showSteps.includes('segment') && data.segments) {
+      drawSegments(ctx, ts, ser, data.segments, data.bi, this._candles);
+    }
+    if (this._showSteps.includes('pivot') && data.pivots) {
+      drawPivots(ctx, ts, ser, data.pivots, data.segments, data.bi, this._candles);
+    }
+    if (this._showSteps.includes('bsp') && data.bsps) {
+      drawBSP(ctx, ts, ser, data.bsps);
+    }
+    if (this._showSteps.includes('fractal')) {
+      drawBiFractals(ctx, ts, ser, data.bi);
+    }
+  }
+
+  _updateBSPMarkers(chanResult, showSteps) {
+    // BSP 标记通过叠加层 Canvas 绘制，此处仅存储数据
+    if (showSteps.includes('bsp')) {
+      this._chanData.bsps = chanResult.bsps || [];
+    } else {
+      this._chanData.bsps = [];
+    }
+  }
+
+  destroy() {
+    if (this.chart) {
+      this.chart.remove();
+      this.chart = null;
+      this.candleSeries = null;
+      this.volumeSeries = null;
+    }
+    if (this.overlayCanvas && this.overlayCanvas.parentElement) {
+      this.overlayCanvas.parentElement.removeChild(this.overlayCanvas);
+    }
+    this.overlayCanvas = null;
+    this.overlayCtx = null;
+  }
+
+  setData(candles, chanResult, showSteps) {
+    this._candles = candles;
+    this._chanData = {
+      bi: chanResult.bi,
+      virtualBi: chanResult.virtualBi,
+      segments: chanResult.segments,
+      pivots: chanResult.pivots,
+      tops: chanResult.tops,
+      bottoms: chanResult.bottoms,
+    };
+    this._showSteps = [...showSteps];
+    this.init();
+
+    const toSec = (t) => Math.floor(t / 1000);
+
+    // K线数据
+    this.candleSeries.setData(candles.map(c => ({
+      time: toSec(c.time),
+      open: c.open, high: c.high, low: c.low, close: c.close,
+    })));
+
+    // 成交量
+    this.volumeSeries.setData(candles.map(c => ({
+      time: toSec(c.time),
+      value: c.volume,
+      color: c.close >= c.open ? 'rgba(38,166,154,0.45)' : 'rgba(239,83,80,0.45)',
+    })));
+
+    this.chart.timeScale().fitContent();
+    // BSP 标记
+    this._updateBSPMarkers(chanResult, showSteps);
+    // 多时间点触发确保叠加层绘制
+    this._scheduleOverlayRedraw();
+    for (const ms of [100, 300, 600, 1200]) {
+      setTimeout(() => { this._redrawPending = false; this._drawOverlay(); }, ms);
+    }
+  }
+
+  getTimeScale() { return this.chart ? this.chart.timeScale() : null; }
+}
+
+// ========== 绘制辅助函数 ==========
+
+function toSec(t) { return Math.floor(t / 1000); }
+function formatP(p) {
+  if (p >= 1000) return p.toFixed(2);
+  if (p >= 1) return p.toFixed(4);
+  if (p >= 0.01) return p.toFixed(6);
+  return p.toFixed(8);
+}
+
+function drawBiLines(ctx, timeScale, series, biList, candles) {
+  for (const bi of biList) {
+    const fromT = toSec(bi.from.candle.time);
+    const toT = toSec(bi.to.candle.time);
+    const x1 = timeScale.timeToCoordinate(fromT);
+    const y1 = series.priceToCoordinate(bi.fromPrice);
+    const x2 = timeScale.timeToCoordinate(toT);
+    const y2 = series.priceToCoordinate(bi.toPrice);
+    if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+
+    const color = bi.direction === 'up' ? '#5c8aff' : '#f5a623';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  }
+}
+
+function drawVirtualBiLine(ctx, timeScale, series, bi) {
+  const x1 = timeScale.timeToCoordinate(toSec(bi.from.candle.time));
+  const y1 = series.priceToCoordinate(bi.fromPrice);
+  const x2 = timeScale.timeToCoordinate(toSec(bi.to.candle.time));
+  const y2 = series.priceToCoordinate(bi.toPrice);
+  if (x1 === null || y1 === null || x2 === null || y2 === null) return;
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+  ctx.lineWidth = 1.4;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+  ctx.beginPath();
+  ctx.arc(x2, y2, 3, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
+function drawSegments(ctx, timeScale, series, segments, biList, candles) {
+  for (const seg of segments) {
+    const startBi = biList[seg.biIndices[0]];
+    const endBi = biList[seg.biIndices[seg.biIndices.length - 1]];
+    if (!startBi || !endBi) continue;
+
+    const x1 = timeScale.timeToCoordinate(toSec(startBi.from.candle.time));
+    const y1 = series.priceToCoordinate(startBi.fromPrice);
+    const x2 = timeScale.timeToCoordinate(toSec(endBi.to.candle.time));
+    const y2 = series.priceToCoordinate(endBi.toPrice);
+    if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+
+    ctx.strokeStyle = '#ab47bc';
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([6, 3]);
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+function drawPivots(ctx, timeScale, series, pivots, segments, biList, candles) {
+  for (const pivot of pivots) {
+    let minT = Infinity, maxT = -Infinity;
+    for (const si of pivot.segIndices) {
+      const seg = segments[si];
+      if (!seg) continue;
+      for (const bi of seg.biIndices) {
+        const b = biList[bi];
+        if (!b) continue;
+        minT = Math.min(minT, toSec(b.from.candle.time), toSec(b.to.candle.time));
+        maxT = Math.max(maxT, toSec(b.from.candle.time), toSec(b.to.candle.time));
+      }
+    }
+    if (minT === Infinity) continue;
+
+    const x1 = timeScale.timeToCoordinate(minT);
+    const x2 = timeScale.timeToCoordinate(maxT);
+    const yZg = series.priceToCoordinate(pivot.zg);
+    const yZd = series.priceToCoordinate(pivot.zd);
+    if (x1 === null || x2 === null || yZg === null || yZd === null) continue;
+
+    const rectX = x1;
+    const rectW = Math.max(2, x2 - x1);
+    const rectY = yZg;
+    const rectH = Math.max(1, yZd - yZg);
+
+    // 半透明填充
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fillRect(rectX, rectY, rectW, rectH);
+
+    // 虚线边框
+    ctx.strokeStyle = 'rgba(255,255,255,0.30)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 2]);
+    ctx.strokeRect(rectX, rectY, rectW, rectH);
+    ctx.setLineDash([]);
+
+    // 中枢标签
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = '10px -apple-system, sans-serif';
+    ctx.fillText('中枢', rectX + 3, rectY - 3);
+  }
+}
+
+const BSP_STYLES = {
+  buy3:    { color: '#00e676', shape: 'square' },
+  sell3:   { color: '#ff1744', shape: 'square' },
+  support: { color: '#4caf50', shape: 'dot' },
+  resist:  { color: '#f44336', shape: 'dot' },
+  breakUp: { color: '#69f0ae', shape: 'diamond' },
+  breakDn: { color: '#ff5252', shape: 'diamond' },
+};
+
+function drawBSP(ctx, timeScale, series, bsps) {
+  for (const bsp of bsps || []) {
+    const x = timeScale.timeToCoordinate(toSec(bsp.time));
+    const y = series.priceToCoordinate(bsp.price);
+    if (x === null || y === null) continue;
+
+    const style = BSP_STYLES[bsp.type] || {
+      color: bsp.direction === 'buy' ? '#26a69a' : '#ef5350',
+      shape: 'dot',
+    };
+
+    drawBSPMarker(ctx, x, y, style);
+    drawBSPLabel(ctx, x, y, bsp, style);
+  }
+}
+
+function drawBSPMarker(ctx, x, y, style) {
+  const size = 7;
+  ctx.fillStyle = style.color;
+  ctx.beginPath();
+
+  if (style.shape === 'square') drawSquarePath(ctx, x, y, size);
+  else if (style.shape === 'diamond') drawDiamondPath(ctx, x, y, size);
+  else drawDotPath(ctx, x, y, size);
+
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawBSPLabel(ctx, x, y, bsp, style) {
+  const labelY = bsp.direction === 'buy' ? y + 18 : y - 11;
+  ctx.fillStyle = style.color;
+  ctx.font = 'bold 8px -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(bsp.label, x, labelY);
+  ctx.textAlign = 'left';
+}
+
+function drawSquarePath(ctx, x, y, size) {
+  ctx.rect(x - size / 2, y - size / 2, size, size);
+}
+
+function drawDiamondPath(ctx, x, y, size) {
+  ctx.moveTo(x, y - size);
+  ctx.lineTo(x + size / 2, y);
+  ctx.lineTo(x, y + size);
+  ctx.lineTo(x - size / 2, y);
+}
+
+function drawDotPath(ctx, x, y, size) {
+  ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+}
+
+function drawBiFractals(ctx, timeScale, series, biList) {
+  const { tops, bottoms } = collectBiFractals(biList);
+  const markers = [
+    ...tops.map(f => ({ ...f, kind: 'top', color: '#ef5350', price: f.high, sign: -1 })),
+    ...bottoms.map(f => ({ ...f, kind: 'bottom', color: '#26a69a', price: f.low, sign: 1 })),
+  ];
+
+  const positioned = [];
+  const xBuckets = new Map();
+  for (const marker of markers) {
+    if (!marker.time) continue;
+
+    const coordX = timeScale.timeToCoordinate(toSec(marker.time));
+    const coordY = series.priceToCoordinate(marker.price);
+    if (coordX === null || coordY === null) continue;
+
+    const x = Math.round(coordX);
+    positioned.push({ ...marker, x, y: coordY });
+    xBuckets.set(x, (xBuckets.get(x) || 0) + 1);
+  }
+
+  const drawnByX = new Map();
+  for (const marker of positioned) {
+    const bucketSize = xBuckets.get(marker.x) || 1;
+    const bucketIndex = drawnByX.get(marker.x) || 0;
+    drawnByX.set(marker.x, bucketIndex + 1);
+
+    const offsetX = bucketSize > 1 ? (bucketIndex - (bucketSize - 1) / 2) * 10 : 0;
+    drawFractalMarker(ctx, marker, offsetX);
+  }
+}
+
+function drawFractalMarker(ctx, marker, offsetX) {
+  const size = 4;
+  const x = marker.x + offsetX;
+  const y = marker.y;
+
+  // 只画一个三角形；数字标签不再带 ▲/▼，避免视觉上像两个分型。
+  ctx.fillStyle = marker.color;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x - size, y + marker.sign * size * 2);
+  ctx.lineTo(x + size, y + marker.sign * size * 2);
+  ctx.closePath();
+  ctx.fill();
+
+  const text = String(marker.index);
+  const labelY = y + marker.sign * (size * 2 + 11);
+  ctx.font = '8px -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = marker.color;
+  ctx.fillText(text, x, labelY);
+  ctx.textAlign = 'left';
+}
+
+// ===================================================================
+//  模块五：Vue 应用
+// ===================================================================
+const { createApp, ref, reactive, computed, onMounted, nextTick } = Vue;
+
+const app = createApp({
+  setup() {
+    const coins = ['BTCUSDT', 'ETHUSDT', 'XRPUSDT', 'SOLUSDT', 'BNBUSDT'];
+    const periods = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'];
+    const biModes = [
+      { key: 'strict', label: '严格' },
+      { key: 'standard', label: '标准' },
+      { key: 'loose', label: '宽松' },
+    ];
+    const chanSteps = [
+      { key: 'bi', label: '笔识别' },
+      { key: 'segment', label: '线段划分' },
+      { key: 'pivot', label: '中枢构建' },
+      { key: 'trend', label: '走势类型判定' },
+      { key: 'bsp', label: '买卖点' },
+      { key: 'fractal', label: '显示分型' },
+    ];
+
+    const selectedCoin = ref('BTCUSDT');
+    const selectedPeriod = ref('1m');
+    const selectedBiMode = ref('standard');
+    const showVirtualBi = ref(true);
+    const selectedSteps = ref([]);
+    const loading = ref(false);
+    const error = ref('');
+    const chartContainer = ref(null);
+
+    const rawDataCache = reactive({});
+    let chartMgr = null;
+
+    const periodData = computed(() => {
+      const raw = rawDataCache[selectedCoin.value];
+      return raw ? aggregateCandles(raw, selectedPeriod.value) : [];
+    });
+
+    const chanResult = computed(() => {
+      const data = periodData.value;
+      if (!data || data.length === 0 || selectedSteps.value.length === 0) {
+        return { bi: [], virtualBi: null, segments: [], pivots: [], trend: null };
+      }
+      return analyzeChanTheory(data, selectedSteps.value, {
+        biMode: selectedBiMode.value,
+        showVirtualBi: showVirtualBi.value,
+      });
+    });
+
+    const currentBiModeLabel = computed(() => {
+      const mode = biModes.find(m => m.key === selectedBiMode.value);
+      return mode ? mode.label : '';
+    });
+
+    const trendLabel = computed(() => {
+      if (!selectedSteps.value.includes('trend')) return '';
+      const cr = chanResult.value;
+      return cr.trend ? cr.trend.label : '';
+    });
+
+    const trendClass = computed(() => {
+      if (!selectedSteps.value.includes('trend')) return '';
+      const cr = chanResult.value;
+      return cr.trend ? cr.trend.direction : '';
+    });
+
+    const chanMeta = computed(() => {
+      const cr = chanResult.value;
+      const bi = cr.bi || [];
+      const segs = cr.segments || [];
+      const pivs = cr.pivots || [];
+
+      // 统计参与成笔的有效分型端点，同一个端点只统计一次。
+      const biFractals = collectBiFractals(bi);
+      const topCount = biFractals.tops.length;
+      const bottomCount = biFractals.bottoms.length;
+
+      const biUp = bi.filter(b => b.direction === 'up').length;
+      const biDown = bi.filter(b => b.direction === 'down').length;
+
+      let lastPivot = null, lastPivotZg = '', lastPivotZd = '';
+      if (pivs.length > 0) {
+        lastPivot = pivs[pivs.length - 1];
+        lastPivotZg = formatP(lastPivot.zg);
+        lastPivotZd = formatP(lastPivot.zd);
+      }
+
+      return {
+        topCount, bottomCount,
+        biCount: bi.length, biUpCount: biUp, biDownCount: biDown,
+        segCount: segs.length,
+        hasVirtualBi: !!cr.virtualBi,
+        pivCount: pivs.length, lastPivot: !!lastPivot, lastPivotZg, lastPivotZd,
+        bspCount: (cr.bsps || []).length,
+        bspBuy3: (cr.bsps || []).filter(b => b.type === 'buy3').length,
+        bspSell3: (cr.bsps || []).filter(b => b.type === 'sell3').length,
+        bspSupp: (cr.bsps || []).filter(b => b.type === 'support').length,
+        bspResist: (cr.bsps || []).filter(b => b.type === 'resist').length,
+        bspBreakUp: (cr.bsps || []).filter(b => b.type === 'breakUp').length,
+        bspBreakDn: (cr.bsps || []).filter(b => b.type === 'breakDn').length,
+      };
+    });
+
+    async function loadData(coin) {
+      if (rawDataCache[coin] && rawDataCache[coin].length > 0) return;
+      loading.value = true;
+      error.value = '';
+      try {
+        const resp = await fetch(`data/${coin}_1m.csv`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const text = await resp.text();
+        const candles = parseCSV(text);
+        if (candles.length === 0) throw new Error('数据为空');
+        rawDataCache[coin] = candles;
+      } catch (e) {
+        console.error(`加载 ${coin} 失败:`, e);
+        error.value = `加载 ${coin} 数据失败: ${e.message}`;
+        if (e.message.includes('Failed to fetch') || e.message.includes('NetworkError')) {
+          error.value = '无法加载数据文件，请通过HTTP服务器运行此页面';
+        }
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    function switchCoin(coin) {
+      if (selectedCoin.value === coin) return;
+      selectedCoin.value = coin;
+      loadData(coin).then(() => updateChart());
+    }
+
+    function switchPeriod(period) {
+      if (selectedPeriod.value === period) return;
+      selectedPeriod.value = period;
+      updateChart();
+    }
+
+    function switchBiMode(mode) {
+      if (selectedBiMode.value === mode) return;
+      selectedBiMode.value = mode;
+      updateChart();
+    }
+
+    function onStepsChange() {
+      updateChart();
+    }
+
+    function updateChart() {
+      if (!chartMgr) return;
+      error.value = '';
+      const data = periodData.value;
+      if (!data || data.length === 0) return;
+      chartMgr.setData(data, chanResult.value, selectedSteps.value);
+    }
+
+    onMounted(async () => {
+      // 初始化图表管理器
+      if (chartContainer.value) {
+        chartMgr = new ChartManager(chartContainer.value);
+      }
+
+      // ResizeObserver 处理容器大小变化
+      if (typeof ResizeObserver !== 'undefined' && chartContainer.value) {
+        new ResizeObserver(() => {
+          if (chartMgr && chartMgr.chart) {
+            chartMgr.chart.applyOptions({
+              width: chartContainer.value.clientWidth,
+              height: chartContainer.value.clientHeight,
+            });
+          }
+        }).observe(chartContainer.value);
+      }
+
+      await loadData('BTCUSDT');
+      await nextTick();
+      updateChart();
+
+      // 预加载其他币种
+      for (const coin of coins) {
+        if (coin !== 'BTCUSDT') loadData(coin);
+      }
+    });
+
+    return {
+      coins, periods, biModes, chanSteps,
+      selectedCoin, selectedPeriod, selectedBiMode, showVirtualBi, selectedSteps,
+      loading, error, periodData,
+      trendLabel, trendClass, chanMeta, currentBiModeLabel,
+      chartContainer,
+      switchCoin, switchPeriod, switchBiMode, onStepsChange,
+    };
+  },
+});
+
+app.use(ArcoVue);
+app.mount('#app');
+</script>
+</body>
+</html>
